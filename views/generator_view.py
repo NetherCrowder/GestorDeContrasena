@@ -58,7 +58,7 @@ class GeneratorView:
                 ft.dropdown.Option(key, prof["label"])
                 for key, prof in PASSWORD_PROFILES.items()
             ],
-            on_change=self._on_profile_change,
+            on_select=self._on_profile_change,
             content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
         )
 
@@ -77,22 +77,22 @@ class GeneratorView:
         # Switches de opciones
         self.sw_upper = ft.Switch(
             label="Mayúsculas (A-Z)", value=self.rules.get("allow_uppercase", True),
-            active_color=ft.Colors.CYAN, label_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
+            active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
             on_change=lambda e: self._generate(),
         )
         self.sw_lower = ft.Switch(
             label="Minúsculas (a-z)", value=self.rules.get("allow_lowercase", True),
-            active_color=ft.Colors.CYAN, label_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
+            active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
             on_change=lambda e: self._generate(),
         )
         self.sw_numbers = ft.Switch(
             label="Números (0-9)", value=self.rules.get("allow_numbers", True),
-            active_color=ft.Colors.CYAN, label_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
+            active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
             on_change=lambda e: self._generate(),
         )
         self.sw_symbols = ft.Switch(
             label="Símbolos (!@#$...)", value=self.rules.get("allow_symbols", True),
-            active_color=ft.Colors.CYAN, label_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
+            active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
             on_change=lambda e: self._generate(),
         )
 
@@ -255,14 +255,24 @@ class GeneratorView:
     def _copy_password(self, e):
         if not self.generated_password:
             return
-        self.page.set_clipboard(self.generated_password)
-        self.page.open(
-            ft.SnackBar(
-                content=ft.Text("¡Contraseña copiada!", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.GREEN_700,
-                duration=2000,
-            )
-        )
+            
+        self.page.run_task(self.page.clipboard.set, self.generated_password)
+        
+        original_icon = e.control.icon
+        original_color = e.control.icon_color
+        
+        e.control.icon = ft.Icons.CHECK
+        e.control.icon_color = ft.Colors.GREEN
+        e.control.update()
+        
+        async def restore_btn():
+            import asyncio
+            await asyncio.sleep(2)
+            e.control.icon = original_icon
+            e.control.icon_color = original_color
+            e.control.update()
+            
+        self.page.run_task(restore_btn)
 
     def _use_password(self, e):
         if self.on_use_password and self.generated_password:

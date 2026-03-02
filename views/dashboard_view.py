@@ -287,25 +287,27 @@ class DashboardView:
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
-            self.page.set_clipboard(username)
-            self.page.open(
-                ft.SnackBar(
-                    content=ft.Text("Usuario copiado", color=ft.Colors.WHITE),
-                    bgcolor=ft.Colors.CYAN_700, duration=1500,
-                )
+            self.page.run_task(self.page.clipboard.set, username)
+            snack = ft.SnackBar(
+                content=ft.Text("Usuario copiado", color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.CYAN_700, duration=1500,
             )
+            snack.open = True
+            self.page.overlay.append(snack)
+            self.page.update()
 
     def _copy_pass(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
-            self.page.set_clipboard(password)
-            self.page.open(
-                ft.SnackBar(
-                    content=ft.Text("Contraseña copiada", color=ft.Colors.WHITE),
-                    bgcolor=ft.Colors.GREEN_700, duration=1500,
-                )
+            self.page.run_task(self.page.clipboard.set, password)
+            snack = ft.SnackBar(
+                content=ft.Text("Contraseña copiada", color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.GREEN_700, duration=1500,
             )
+            snack.open = True
+            self.page.overlay.append(snack)
+            self.page.update()
 
     def _open_url(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
@@ -334,11 +336,20 @@ class DashboardView:
             self.page.update()
 
     def _delete_password(self, pw_id):
-        def do_delete(e):
-            self.db.delete_password(pw_id)
+        def close_dialog():
             dialog.open = False
             self.page.update()
-            self.on_navigate("dashboard")
+
+        def do_delete(e):
+            self.db.delete_password(pw_id)
+            close_dialog()
+            
+            async def refresh():
+                import asyncio
+                await asyncio.sleep(0.3)
+                self.on_navigate("dashboard")
+                
+            self.page.run_task(refresh)
 
         dialog = ft.AlertDialog(
             title=ft.Text("¿Eliminar contraseña?", color=ft.Colors.WHITE),
@@ -346,12 +357,14 @@ class DashboardView:
             bgcolor="#1e2a3a",
             actions=[
                 ft.TextButton("Cancelar", style=ft.ButtonStyle(color=ft.Colors.WHITE54),
-                              on_click=lambda e: setattr(dialog, 'open', False) or self.page.update()),
+                              on_click=lambda e: close_dialog()),
                 ft.TextButton("Eliminar", style=ft.ButtonStyle(color=ft.Colors.RED),
                               on_click=do_delete),
             ],
         )
-        self.page.open(dialog)
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
 
     def _add_password(self):
         from views.password_form import PasswordFormView
@@ -423,11 +436,20 @@ class DashboardView:
             ],
         )
 
-        def save_rotation(e):
-            self.db.set_config("password_rotation_days", dd.value)
+        def close_dialog():
             dialog.open = False
             self.page.update()
-            self.on_navigate("dashboard")
+
+        def save_rotation(e):
+            self.db.set_config("password_rotation_days", dd.value)
+            close_dialog()
+            
+            async def refresh():
+                import asyncio
+                await asyncio.sleep(0.3)
+                self.on_navigate("dashboard")
+                
+            self.page.run_task(refresh)
 
         dialog = ft.AlertDialog(
             title=ft.Text("Rotación de contraseña", color=ft.Colors.WHITE),
@@ -435,9 +457,11 @@ class DashboardView:
             bgcolor="#1e2a3a",
             actions=[
                 ft.TextButton("Cancelar", style=ft.ButtonStyle(color=ft.Colors.WHITE54),
-                              on_click=lambda e: setattr(dialog, 'open', False) or self.page.update()),
+                              on_click=lambda e: close_dialog()),
                 ft.TextButton("Guardar", style=ft.ButtonStyle(color=ft.Colors.CYAN),
                               on_click=save_rotation),
             ],
         )
-        self.page.open(dialog)
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
