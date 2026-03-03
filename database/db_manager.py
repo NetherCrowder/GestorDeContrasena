@@ -30,8 +30,17 @@ class DatabaseManager:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA_SQL)
+        self._migrate_temp_passwords()
         self._seed_categories()
         self.conn.commit()
+
+    def _migrate_temp_passwords(self):
+        """Añade la columna 'name' a temp_passwords si no existe."""
+        try:
+            self.conn.execute("ALTER TABLE temp_passwords ADD COLUMN name TEXT DEFAULT 'Sin nombre'")
+        except sqlite3.OperationalError:
+            # La columna ya existe
+            pass
 
     def close(self):
         if self.conn:
@@ -184,11 +193,11 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
     #  Contraseñas Temporales (Almacén Generador)
     # ------------------------------------------------------------------ #
-    def add_temp_password(self, password: bytes) -> None:
+    def add_temp_password(self, password: bytes, name: str = "Sin nombre") -> None:
         now = datetime.now().isoformat()
         self.conn.execute(
-            "INSERT INTO temp_passwords (password, created_at) VALUES (?, ?)",
-            (password, now)
+            "INSERT INTO temp_passwords (password, name, created_at) VALUES (?, ?, ?)",
+            (password, name, now)
         )
         self.conn.commit()
 
@@ -210,4 +219,9 @@ class DatabaseManager:
                    ORDER BY created_at DESC LIMIT 15
                )"""
         )
+        self.conn.commit()
+
+    def delete_temp_password(self, temp_id: int) -> None:
+        """Elimina una contraseña temporal por su ID."""
+        self.conn.execute("DELETE FROM temp_passwords WHERE id = ?", (temp_id,))
         self.conn.commit()

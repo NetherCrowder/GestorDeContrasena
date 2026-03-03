@@ -310,9 +310,20 @@ class DashboardView:
             self.page.update()
 
     def _open_url(self, pw_id):
-        pw = self.db.get_password_by_id(pw_id)
-        if pw and pw.get("url"):
-            self.page.launch_url(pw["url"])
+        async def launch():
+            pw = self.db.get_password_by_id(pw_id)
+            if pw and pw.get("url"):
+                url = pw["url"].strip()
+                if url and not (url.startswith("http://") or url.startswith("https://")):
+                    url = f"https://{url}"
+                
+                # En versiones modernas de Flet, launch_url es una coroutine
+                res = self.page.launch_url(url)
+                import asyncio
+                if asyncio.iscoroutine(res):
+                    await res
+        
+        self.page.run_task(launch)
 
     def _toggle_favorite(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)

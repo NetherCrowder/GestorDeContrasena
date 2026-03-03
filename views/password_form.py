@@ -43,7 +43,6 @@ class PasswordFormView:
             key = self.auth.key
             user_val = decrypt(self.pw_data["username"], key) if self.pw_data.get("username") else ""
             pass_val = decrypt(self.pw_data["password"], key) if self.pw_data.get("password") else ""
-            notes_val = decrypt(self.pw_data["notes"], key) if self.pw_data.get("notes") else ""
             url_val = self.pw_data.get("url", "")
             cat_id = str(self.pw_data.get("category_id", 8))
             try:
@@ -100,15 +99,6 @@ class PasswordFormView:
             prefix_icon=ft.Icons.LINK,
             content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
         )
-        self.notes_field = ft.TextField(
-            label="Notas (opcional)", value=notes_val,
-            label_style=ft.TextStyle(color=ft.Colors.CYAN),
-            hint_style=ft.TextStyle(color=ft.Colors.WHITE24),
-            border_color=ft.Colors.WHITE24, focused_border_color=ft.Colors.CYAN,
-            color=ft.Colors.WHITE, cursor_color=ft.Colors.CYAN, text_size=14,
-            multiline=True, min_lines=2, max_lines=4,
-            content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
-        )
 
         # Categoría
         self.cat_dropdown = ft.Dropdown(
@@ -163,7 +153,6 @@ class PasswordFormView:
                     self.strength_bar,
                     self.url_field,
                     self.cat_dropdown,
-                    self.notes_field,
                     self.error_text,
                     ft.Container(height=12),
                     ft.ElevatedButton(
@@ -263,7 +252,7 @@ class PasswordFormView:
 
         username_enc = encrypt(self.user_field.value or "", key)
         password_enc = encrypt(password, key)
-        notes_enc = encrypt(self.notes_field.value or "", key)
+        notes_enc = encrypt("", key)  # Dejar vacío al eliminar campo
         url = self.url_field.value or ""
         category_id = int(self.cat_dropdown.value or 8)
 

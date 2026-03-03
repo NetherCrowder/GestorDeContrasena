@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE TABLE IF NOT EXISTS temp_passwords (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     password    BLOB    NOT NULL,
+    name        TEXT    DEFAULT 'Sin nombre',
     created_at  TEXT    NOT NULL
 );
 """
