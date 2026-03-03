@@ -11,15 +11,41 @@ class GeneratorView:
     """Generador de contraseñas con restricciones por sitio."""
 
     def __init__(self, page: ft.Page, initial_rules: dict | None = None,
-                 on_use_password: callable = None):
+                 on_use_password: callable = None, db_manager=None, auth_manager=None):
         self.page = page
         self.on_use_password = on_use_password
+        self.db = db_manager
+        self.auth = auth_manager
         self.rules = initial_rules or PASSWORD_PROFILES["estandar"].copy()
         self.generated_password = ""
         self._mounted = False  # evita page.update() antes de montar
+        self.history_list = ft.ListView(spacing=8, height=200, scale=1.0)
+        
+        # Modo independiente: limpiar viejas y cargar historial
+        if not self.on_use_password and self.db and self.auth:
+            self.db.cleanup_temp_passwords()
+            self._load_history()
 
     def build(self) -> ft.Container:
         # Campo de contraseña generada
+        suffix_btn = None
+        if not self.on_use_password:
+            suffix_btn = ft.IconButton(
+                icon=ft.Icons.SAVE,
+                icon_color=ft.Colors.CYAN,
+                icon_size=20,
+                tooltip="Guardar en historial",
+                on_click=self._save_current_to_history,
+            )
+        else:
+            suffix_btn = ft.IconButton(
+                icon=ft.Icons.COPY,
+                icon_color=ft.Colors.CYAN,
+                icon_size=20,
+                tooltip="Copiar",
+                on_click=self._copy_password,
+            )
+
         self.password_display = ft.TextField(
             value="",
             read_only=True,
@@ -29,13 +55,7 @@ class GeneratorView:
             border_color=ft.Colors.CYAN_700,
             bgcolor="#1a1a2e",
             content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
-            suffix=ft.IconButton(
-                icon=ft.Icons.COPY,
-                icon_color=ft.Colors.CYAN,
-                icon_size=20,
-                tooltip="Copiar",
-                on_click=self._copy_password,
-            ),
+            suffix=suffix_btn,
         )
 
         # Barra de fortaleza
@@ -118,6 +138,25 @@ class GeneratorView:
                 ),
             ]
 
+        # Historial de generador independiente
+        history_section = []
+        if not self.on_use_password:
+            history_section = [
+                ft.Container(height=24),
+                ft.Row([
+                    ft.Icon(ft.Icons.HISTORY, color=ft.Colors.WHITE54, size=20),
+                    ft.Text("Historial Temporal (Máx 15 - 24h)", size=16, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                ]),
+                ft.Container(height=8),
+                ft.Container(
+                    content=self.history_list,
+                    border=ft.border.all(1, ft.Colors.WHITE10),
+                    border_radius=8,
+                    padding=8,
+                    bgcolor="#1e2a3a",
+                )
+            ]
+
         # Generar una contraseña inicial (sin page.update)
         self._generate_silent()
 
@@ -157,6 +196,7 @@ class GeneratorView:
                 self.options_column,
                 ft.Container(height=12),
                 *use_btn,
+                *history_section,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=6,
@@ -246,11 +286,43 @@ class GeneratorView:
     def _generate(self):
         """Genera una contraseña y actualiza la UI."""
         self._generate_silent()
+        
         if self._mounted:
             try:
                 self.page.update()
             except Exception:
                 pass  # Control aún no montado
+
+    def _save_current_to_history(self, e):
+        """Guarda la contraseña actual en el historial de forma manual."""
+        if not self.on_use_password and self.db and self.auth and self.generated_password:
+            from security.crypto import encrypt
+            try:
+                enc_pw = encrypt(self.generated_password, self.auth.key)
+                self.db.add_temp_password(enc_pw)
+                self.db.cleanup_temp_passwords()
+                self._load_history()
+                
+                # Feedback de guardado
+                original_icon = e.control.icon
+                original_color = e.control.icon_color
+                
+                e.control.icon = ft.Icons.CHECK
+                e.control.icon_color = ft.Colors.GREEN
+                e.control.tooltip = "Guardado"
+                e.control.update()
+                
+                async def restore_btn():
+                    import asyncio
+                    await asyncio.sleep(2)
+                    e.control.icon = original_icon
+                    e.control.icon_color = original_color
+                    e.control.tooltip = "Guardar en historial"
+                    e.control.update()
+                    
+                self.page.run_task(restore_btn)
+            except Exception as ex:
+                print(f"Error saving temp password: {ex}")
 
     def _copy_password(self, e):
         if not self.generated_password:
@@ -289,4 +361,62 @@ class GeneratorView:
             "allowed_symbols": self.rules.get("allowed_symbols", ""),
             "pin_only": self.rules.get("pin_only", False),
         }
+
+    # ------------------------------------------------------------------ #
+    #  Historial Temporal
+    # ------------------------------------------------------------------ #
+    def _load_history(self):
+        if not self.db or not self.auth:
+            return
+            
+        from security.crypto import decrypt
+        
+        temps = self.db.get_temp_passwords()
+        self.history_list.controls.clear()
+        
+        for idx, row in enumerate(temps):
+            try:
+                raw_pw = decrypt(row["password"], self.auth.key)
+                score, label = password_strength(raw_pw)
+                color = strength_color(score)
+                
+                # Ocultar parcialmente por seguridad en la UI
+                masked = raw_pw[:4] + "*" * (len(raw_pw)-4) if len(raw_pw) > 4 else "***"
+                
+                item = ft.ListTile(
+                    title=ft.Text(masked, color=ft.Colors.WHITE, size=15, selectable=True),
+                    subtitle=ft.Text(f"{label} • {score}%", color=color, size=12),
+                    trailing=ft.IconButton(
+                        icon=ft.Icons.COPY,
+                        icon_color=ft.Colors.CYAN,
+                        tooltip="Copiar al portapapeles",
+                        on_click=lambda e, pw=raw_pw: self._copy_history(pw, e.control)
+                    ),
+                    bgcolor="#16213e" if idx % 2 == 0 else "#1a1a2e"
+                )
+                self.history_list.controls.append(item)
+            except Exception:
+                continue
+                
+    def _copy_history(self, text, icon_btn):
+        if not text:
+            return
+        
+        self.page.run_task(self.page.clipboard.set, text)
+        
+        original_icon = icon_btn.icon
+        original_color = icon_btn.icon_color
+        
+        icon_btn.icon = ft.Icons.CHECK
+        icon_btn.icon_color = ft.Colors.GREEN
+        icon_btn.update()
+        
+        async def restore():
+            import asyncio
+            await asyncio.sleep(2)
+            icon_btn.icon = original_icon
+            icon_btn.icon_color = original_color
+            icon_btn.update()
+            
+        self.page.run_task(restore)
 

@@ -124,20 +124,6 @@ class PasswordFormView:
             content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
         )
 
-        # Perfil de restricciones
-        self.profile_dropdown = ft.Dropdown(
-            label="Perfil de contraseña",
-            label_style=ft.TextStyle(color=ft.Colors.CYAN),
-            border_color=ft.Colors.WHITE24, focused_border_color=ft.Colors.CYAN,
-            color=ft.Colors.WHITE, text_size=14,
-            value="estandar",
-            options=[
-                ft.dropdown.Option(key, prof["label"])
-                for key, prof in PASSWORD_PROFILES.items()
-            ],
-            content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
-        )
-
         self.error_text = ft.Text("", color=ft.Colors.RED_300, size=13, visible=False)
 
         return ft.Container(
@@ -177,7 +163,6 @@ class PasswordFormView:
                     self.strength_bar,
                     self.url_field,
                     self.cat_dropdown,
-                    self.profile_dropdown,
                     self.notes_field,
                     self.error_text,
                     ft.Container(height=12),
@@ -221,9 +206,14 @@ class PasswordFormView:
         """Abre el generador en un bottom sheet."""
         from views.generator_view import GeneratorView
 
-        # Obtener reglas del perfil seleccionado
-        profile_key = self.profile_dropdown.value or "estandar"
-        rules = PASSWORD_PROFILES.get(profile_key, PASSWORD_PROFILES["estandar"]).copy()
+        # Obtener reglas existentes o usar el perfil por defecto
+        if self.is_edit and self.pw_data and self.pw_data.get("password_rules"):
+            try:
+                rules = json.loads(self.pw_data["password_rules"])
+            except (json.JSONDecodeError, TypeError):
+                rules = PASSWORD_PROFILES["estandar"].copy()
+        else:
+            rules = PASSWORD_PROFILES["estandar"].copy()
 
         gen = GeneratorView(
             self.page,
@@ -246,6 +236,7 @@ class PasswordFormView:
 
     def _use_generated_password(self, password: str, rules: dict):
         self.pass_field.value = password
+        self.current_rules = rules
         self._update_strength(password)
         # Cerrar bottom sheet
         if hasattr(self, '_current_sheet'):
@@ -277,8 +268,12 @@ class PasswordFormView:
         category_id = int(self.cat_dropdown.value or 8)
 
         # Obtener reglas del perfil
-        profile_key = self.profile_dropdown.value or "estandar"
-        rules = PASSWORD_PROFILES.get(profile_key, {})
+        rules = getattr(self, "current_rules", {})
+        if not rules and self.is_edit and self.pw_data:
+            try:
+                rules = json.loads(self.pw_data.get("password_rules", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                rules = {}
 
         if self.is_edit:
             self.db.update_password(

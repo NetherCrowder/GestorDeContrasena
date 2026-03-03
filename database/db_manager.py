@@ -180,3 +180,34 @@ class DatabaseManager:
 
     def has_master_password(self) -> bool:
         return self.get_config("master_password_hash") is not None
+
+    # ------------------------------------------------------------------ #
+    #  Contraseñas Temporales (Almacén Generador)
+    # ------------------------------------------------------------------ #
+    def add_temp_password(self, password: bytes) -> None:
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "INSERT INTO temp_passwords (password, created_at) VALUES (?, ?)",
+            (password, now)
+        )
+        self.conn.commit()
+
+    def get_temp_passwords(self) -> list[dict]:
+        cur = self.conn.execute("SELECT * FROM temp_passwords ORDER BY created_at DESC")
+        return [dict(row) for row in cur.fetchall()]
+
+    def cleanup_temp_passwords(self) -> None:
+        """Mantiene solo las últimas 15 contraseñas (máx 24 horas)."""
+        # Eliminar las más antiguas de 24h
+        self.conn.execute(
+            "DELETE FROM temp_passwords WHERE created_at < datetime('now', '-1 day')"
+        )
+        # Mantener solo las 15 más recientes
+        self.conn.execute(
+            """DELETE FROM temp_passwords 
+               WHERE id NOT IN (
+                   SELECT id FROM temp_passwords 
+                   ORDER BY created_at DESC LIMIT 15
+               )"""
+        )
+        self.conn.commit()

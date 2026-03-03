@@ -240,7 +240,7 @@ class DashboardView:
             self.tab_content.content = self.favorites_content
         elif idx == 2:
             from views.generator_view import GeneratorView
-            gen = GeneratorView(self.page)
+            gen = GeneratorView(self.page, db_manager=self.db, auth_manager=self.auth)
             self.tab_content.content = gen.build()
         elif idx == 3:
             self.tab_content.content = self.settings_content

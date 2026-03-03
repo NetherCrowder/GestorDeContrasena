@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS config (
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS temp_passwords (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    password    BLOB    NOT NULL,
+    created_at  TEXT    NOT NULL
+);
 """
 
 # Categorías predefinidas para insertar en la primera ejecución
@@ -98,17 +104,7 @@ PASSWORD_PROFILES = {
         "allowed_symbols": "",
         "pin_only": False,
     },
-    "alfanumerico": {
-        "label": "⚡ Letras y números",
-        "min_length": 8,
-        "max_length": 16,
-        "allow_uppercase": True,
-        "allow_lowercase": True,
-        "allow_numbers": True,
-        "allow_symbols": False,
-        "allowed_symbols": "",
-        "pin_only": False,
-    },
+
     "personalizado": {
         "label": "✏️ Personalizado",
         "min_length": 4,
