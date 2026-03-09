@@ -80,7 +80,7 @@ PASSWORD_PROFILES = {
         "allow_lowercase": True,
         "allow_numbers": True,
         "allow_symbols": True,
-        "allowed_symbols": "!@#$%^&*()_+-=[]{}|;:',.<>?/~`",
+        "allowed_symbols": "!@#$%^&*()_+-=[]{}|;:',.<>?/~`ñÑ",
         "pin_only": False,
     },
     "pin": {
@@ -114,7 +114,7 @@ PASSWORD_PROFILES = {
         "allow_lowercase": True,
         "allow_numbers": True,
         "allow_symbols": True,
-        "allowed_symbols": "!@#$%^&*()_+-=[]{}|;:',.<>?/~`",
+        "allowed_symbols": "!@#$%^&*()_+-=[]{}|;:',.<>?/~`ñÑ",
         "pin_only": False,
     },
 }

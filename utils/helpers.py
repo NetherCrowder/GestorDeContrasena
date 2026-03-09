@@ -78,7 +78,7 @@ def password_strength(password: str) -> tuple[int, str]:
     has_lower = any(c.islower() for c in password)
     has_upper = any(c.isupper() for c in password)
     has_digit = any(c.isdigit() for c in password)
-    has_symbol = any(c in "!@#$%^&*()_+-=[]{}|;:',.<>?/~`" for c in password)
+    has_symbol = any(c in "!@#$%^&*()_+-=[]{}|;:',.<>?/~`ñÑ" for c in password)
 
     if has_lower:
         score += 10

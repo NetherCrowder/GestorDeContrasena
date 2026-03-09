@@ -132,11 +132,23 @@ class GeneratorView:
         self.sw_symbols = ft.Switch(
             label="Símbolos (!@#$...)", value=self.rules.get("allow_symbols", True),
             active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
+            on_change=lambda e: self._on_switch_change(),
+        )
+        self.symbols_input = ft.TextField(
+            label="Símbolos específicos",
+            value=self.rules.get("allowed_symbols", ""),
+            label_style=ft.TextStyle(color=ft.Colors.WHITE54, size=12),
+            color=ft.Colors.WHITE,
+            text_size=13,
+            border_color=ft.Colors.WHITE10,
+            focused_border_color=ft.Colors.CYAN,
+            content_padding=ft.padding.symmetric(horizontal=12, vertical=8),
             on_change=lambda e: self._generate(),
+            visible=self.sw_symbols.value,
         )
 
         self.options_column = ft.Column(
-            [self.sw_upper, self.sw_lower, self.sw_numbers, self.sw_symbols],
+            [self.sw_upper, self.sw_lower, self.sw_numbers, self.sw_symbols, self.symbols_input],
             spacing=2,
             visible=False, # Perfil por defecto es 'estandar'
         )
@@ -290,9 +302,17 @@ class GeneratorView:
         self.sw_lower.disabled = not is_custom
         self.sw_numbers.disabled = not is_custom
         self.sw_symbols.disabled = not is_custom
+        self.symbols_input.disabled = not (is_custom or profile_key == "estandar")
 
-        self.options_column.visible = is_custom
+        self.symbols_input.value = profile.get("allowed_symbols", "")
+        self.symbols_input.visible = self.sw_symbols.value and (is_custom or profile_key == "estandar")
 
+        self.options_column.visible = is_custom or profile_key == "estandar"
+
+        self._generate()
+
+    def _on_switch_change(self):
+        self.symbols_input.visible = self.sw_symbols.value and (self.profile_dropdown.value == "estandar" or self.profile_dropdown.value == "personalizado")
         self._generate()
 
     def _on_length_change(self, e):
@@ -311,7 +331,7 @@ class GeneratorView:
                 allow_lowercase=self.sw_lower.value if hasattr(self, 'sw_lower') else True,
                 allow_numbers=self.sw_numbers.value if hasattr(self, 'sw_numbers') else True,
                 allow_symbols=self.sw_symbols.value if hasattr(self, 'sw_symbols') else True,
-                allowed_symbols=self.rules.get("allowed_symbols", "!@#$%^&*()_+-="),
+                allowed_symbols=self.symbols_input.value if hasattr(self, 'symbols_input') else self.rules.get("allowed_symbols", ""),
                 pin_only=pin_only,
             )
         except Exception:
@@ -371,7 +391,7 @@ class GeneratorView:
             except Exception as ex:
                 print(f"Error saving temp password: {ex}")
 
-    def _copy_password(self, e):
+    def _show_and_copy_password(self, e):
         if not self.generated_password:
             return
             
@@ -405,7 +425,7 @@ class GeneratorView:
             "allow_lowercase": self.sw_lower.value,
             "allow_numbers": self.sw_numbers.value,
             "allow_symbols": self.sw_symbols.value,
-            "allowed_symbols": self.rules.get("allowed_symbols", ""),
+            "allowed_symbols": self.symbols_input.value,
             "pin_only": self.rules.get("pin_only", False),
         }
 
@@ -462,8 +482,8 @@ class GeneratorView:
                             ft.IconButton(
                                 icon=ft.Icons.COPY,
                                 icon_color=ft.Colors.CYAN,
-                                tooltip="Copiar al portapapeles",
-                                on_click=lambda e, pw=raw_pw: self._copy_history(pw, e.control)
+                                 tooltip="Mostrar y copiar",
+                                 on_click=lambda e, pw=raw_pw: self._show_and_copy_history(pw, e.control)
                             ),
                             ft.IconButton(
                                 icon=ft.Icons.DELETE,
@@ -487,7 +507,7 @@ class GeneratorView:
         self._load_history()
         self.page.update()
                 
-    def _copy_history(self, text, icon_btn):
+    def _show_and_copy_history(self, text, icon_btn):
         if not text:
             return
         

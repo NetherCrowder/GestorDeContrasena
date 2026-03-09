@@ -60,24 +60,23 @@ def create_password_card(
                     alignment=ft.MainAxisAlignment.START,
                 ),
                 # Acciones rápidas
-                ft.Row(
+                ft.Column(
                     [
                         ft.TextButton(
-                            "Copiar usuario",
+                            "Mostrar y copiar usuario",
                             icon=ft.Icons.PERSON,
                             icon_color=ft.Colors.CYAN,
                             style=ft.ButtonStyle(color=ft.Colors.WHITE70),
                             on_click=lambda e, pid=pw_data["id"]: on_copy_user(e, pid),
                         ),
                         ft.TextButton(
-                            "Copiar clave",
+                            "Mostrar y copiar clave",
                             icon=ft.Icons.KEY,
                             icon_color=ft.Colors.AMBER,
                             style=ft.ButtonStyle(color=ft.Colors.WHITE70),
                             on_click=lambda e, pid=pw_data["id"]: on_copy_pass(e, pid),
                         ),
                     ],
-                    alignment=ft.MainAxisAlignment.START,
                     spacing=0,
                 ),
                 # Botones secundarios

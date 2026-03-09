@@ -51,8 +51,8 @@ class DashboardView:
             cat = cat_map.get(pw.get("category_id"), None)
             card = create_password_card(
                 pw, cat,
-                on_copy_user=self._copy_user,
-                on_copy_pass=self._copy_pass,
+                on_copy_user=self._show_and_copy_user,
+                on_copy_pass=self._show_and_copy_pass,
                 on_edit=self._edit_password,
                 on_delete=self._delete_password,
                 on_favorite=self._toggle_favorite,
@@ -267,8 +267,8 @@ class DashboardView:
             cat = categories.get(pw.get("category_id"))
             card = create_password_card(
                 pw, cat,
-                on_copy_user=self._copy_user,
-                on_copy_pass=self._copy_pass,
+                on_copy_user=self._show_and_copy_user,
+                on_copy_pass=self._show_and_copy_pass,
                 on_edit=self._edit_password,
                 on_delete=self._delete_password,
                 on_favorite=self._toggle_favorite,
@@ -283,31 +283,55 @@ class DashboardView:
     # ------------------------------------------------------------------ #
     #  Acciones de contraseñas
     # ------------------------------------------------------------------ #
-    def _copy_user(self, pw_id):
+    def _show_and_copy_user(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
+            
+            # Copiar al portapapeles
             self.page.run_task(self.page.clipboard.set, username)
-            snack = ft.SnackBar(
-                content=ft.Text("Usuario copiado", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.CYAN_700, duration=1500,
-            )
-            snack.open = True
-            self.page.overlay.append(snack)
-            self.page.update()
+            
+            # Mostrar visualmente en el botón
+            original_text = e.control.content
+            original_icon = e.control.icon
+            
+            e.control.content = username
+            e.control.icon = None
+            e.control.update()
 
-    def _copy_pass(self, pw_id):
+            async def restore_btn():
+                import asyncio
+                await asyncio.sleep(3)
+                e.control.content = original_text
+                e.control.icon = original_icon
+                e.control.update()
+                
+            self.page.run_task(restore_btn)
+
+    def _show_and_copy_pass(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
+            
+            # Copiar al portapapeles
             self.page.run_task(self.page.clipboard.set, password)
-            snack = ft.SnackBar(
-                content=ft.Text("Contraseña copiada", color=ft.Colors.WHITE),
-                bgcolor=ft.Colors.GREEN_700, duration=1500,
-            )
-            snack.open = True
-            self.page.overlay.append(snack)
-            self.page.update()
+            
+            # Mostrar visualmente en el botón
+            original_text = e.control.content
+            original_icon = e.control.icon
+            
+            e.control.content = password
+            e.control.icon = None
+            e.control.update()
+
+            async def restore_btn():
+                import asyncio
+                await asyncio.sleep(3)
+                e.control.content = original_text
+                e.control.icon = original_icon
+                e.control.update()
+                
+            self.page.run_task(restore_btn)
 
     def _open_url(self, pw_id):
         async def launch():

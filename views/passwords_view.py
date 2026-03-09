@@ -29,8 +29,8 @@ class PasswordsView:
             card = create_password_card(
                 pw_data=pw,
                 category=self.category,
-                on_copy_user=self._copy_user,
-                on_copy_pass=self._copy_pass,
+                on_copy_user=self._show_and_copy_user,
+                on_copy_pass=self._show_and_copy_pass,
                 on_edit=self._edit_password,
                 on_delete=self._delete_password,
                 on_favorite=self._toggle_favorite,
@@ -98,10 +98,15 @@ class PasswordsView:
             padding=ft.padding.symmetric(horizontal=16, vertical=12),
         )
 
-    def _copy_user(self, e, pw_id):
+    def _show_and_copy_user(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
+            
+            # Copiar al portapapeles
+            self.page.run_task(self.page.clipboard.set, username)
+            
+            # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon
             
@@ -118,10 +123,15 @@ class PasswordsView:
                 
             self.page.run_task(restore_btn)
 
-    def _copy_pass(self, e, pw_id):
+    def _show_and_copy_pass(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
+            
+            # Copiar al portapapeles
+            self.page.run_task(self.page.clipboard.set, password)
+            
+            # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon
             
