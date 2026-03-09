@@ -249,7 +249,7 @@ class DashboardView:
             self.tab_content.content = gen.build()
         elif idx == 3:
             from views.audit_view import AuditView
-            audit = AuditView(self.page, self.db, self.auth)
+            audit = AuditView(self.page, self.db, self.auth, on_edit=self._edit_password)
             self.tab_content.content = audit.build()
         elif idx == 4:
             self.tab_content.content = self.settings_content

@@ -7,10 +7,11 @@ from utils.security_audit import PasswordAuditEngine
 from utils.helpers import strength_color
 
 class AuditView:
-    def __init__(self, page: ft.Page, db_manager, auth_manager):
+    def __init__(self, page: ft.Page, db_manager, auth_manager, on_edit: callable = None):
         self.page = page
         self.db = db_manager
         self.auth = auth_manager
+        self.on_edit = on_edit
         self.audit_engine = PasswordAuditEngine()
 
     def build(self) -> ft.Container:
@@ -193,7 +194,7 @@ class AuditView:
                 trailing=ft.IconButton(
                     icon=ft.Icons.EDIT_OUTLINED,
                     icon_color=ft.Colors.CYAN,
-                    on_click=lambda _: self._open_edit(pw["id"])
+                    on_click=lambda e: self._open_edit(pw["id"])
                 )
             ),
             bgcolor="#1e293b",
@@ -202,9 +203,6 @@ class AuditView:
         )
 
     def _open_edit(self, pw_id):
-        # Esta función debería llamar a la navegación de edición.
-        # Por ahora, un pequeño truco para volver al dashboard y disparar el edit
-        # pero idealmente integraríamos esto mejor.
-        print(f"Edit password {pw_id} triggered from Audit")
-        # En una implementación real, dispararíamos el evento de navegación.
-        # Por ahora, el usuario puede navegar a la lista normal.
+        """Dispara la navegación hacia el formulario de edición."""
+        if self.on_edit:
+            self.on_edit(pw_id)
