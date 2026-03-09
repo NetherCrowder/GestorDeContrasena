@@ -191,6 +191,11 @@ class DashboardView:
                     label="Generar",
                 ),
                 ft.NavigationBarDestination(
+                    icon=ft.Icons.HEALTH_AND_SAFETY_OUTLINED,
+                    selected_icon=ft.Icons.HEALTH_AND_SAFETY,
+                    label="Salud",
+                ),
+                ft.NavigationBarDestination(
                     icon=ft.Icons.SETTINGS_OUTLINED,
                     selected_icon=ft.Icons.SETTINGS,
                     label="Ajustes",
@@ -243,6 +248,10 @@ class DashboardView:
             gen = GeneratorView(self.page, db_manager=self.db, auth_manager=self.auth)
             self.tab_content.content = gen.build()
         elif idx == 3:
+            from views.audit_view import AuditView
+            audit = AuditView(self.page, self.db, self.auth)
+            self.tab_content.content = audit.build()
+        elif idx == 4:
             self.tab_content.content = self.settings_content
         self.page.update()
 
