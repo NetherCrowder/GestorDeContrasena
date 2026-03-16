@@ -590,10 +590,9 @@ class DashboardView:
                     actions=[ft.TextButton("Entendido", on_click=close_success)],
                     bgcolor="#1e2a3a",
                 )
-                self.page.overlay.append(success_dialog)
                 success_dialog.open = True
+                self.page.overlay.append(success_dialog)
                 self.page.update()
-                print(f"Exportación exitosa: {path}")
             else:
                 self.show_snackbar("❌ Error al exportar.")
 
@@ -733,12 +732,28 @@ class DashboardView:
                     )
                     new_count += 1
             
-            msg = f"✅ Restauración finalizada."
-            if new_count > 0: msg += f" {new_count} nuevas."
-            if updated_count > 0: msg += f" {updated_count} actualizadas."
+            msg = f"Restauración finalizada."
+            stats = []
+            if new_count > 0: stats.append(f"{new_count} nuevas")
+            if updated_count > 0: stats.append(f"{updated_count} actualizadas")
             
-            self.show_snackbar(msg)
-            self.on_navigate("dashboard")
+            def close_result(_):
+                result_dialog.open = False
+                self.page.update()
+                self.on_navigate("dashboard")
+
+            result_dialog = ft.AlertDialog(
+                title=ft.Text("✅ Importación Completada", color=ft.Colors.CYAN),
+                content=ft.Column([
+                    ft.Text(msg),
+                    ft.Text(", ".join(stats) if stats else "No hubo cambios.", size=14, color=ft.Colors.WHITE70),
+                ], tight=True),
+                actions=[ft.TextButton("Entendido", on_click=close_result)],
+                bgcolor="#1e2a3a",
+            )
+            result_dialog.open = True
+            self.page.overlay.append(result_dialog)
+            self.page.update()
 
         dialog = ft.AlertDialog(
             title=ft.Text("Restaurar Datos", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),

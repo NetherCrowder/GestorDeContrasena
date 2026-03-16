@@ -483,13 +483,13 @@ class GeneratorView:
                                 icon=ft.Icons.COPY,
                                 icon_color=ft.Colors.CYAN,
                                  tooltip="Mostrar y copiar",
-                                 on_click=lambda e, pw=raw_pw: self._show_and_copy_history(pw, e.control)
+                                 on_click=lambda e, pw=raw_pw: self.show_and_copy_history(pw, e.control)
                             ),
                             ft.IconButton(
                                 icon=ft.Icons.DELETE,
                                 icon_color=ft.Colors.RED_400,
                                 tooltip="Eliminar contraseña",
-                                on_click=lambda e, tid=row["id"]: self._delete_history(tid)
+                                on_click=lambda e, tid=row["id"]: self.delete_history(tid)
                             )
                         ], tight=True, alignment=ft.MainAxisAlignment.END),
                         ft.Text(time_str, color=ft.Colors.WHITE38, size=11, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.RIGHT)
