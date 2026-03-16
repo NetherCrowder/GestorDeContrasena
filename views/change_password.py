@@ -129,6 +129,12 @@ class ChangePasswordView:
                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                 on_click=self.on_change,
             ),
+            ft.TextButton(
+                "Regresar",
+                style=ft.ButtonStyle(color=ft.Colors.WHITE54),
+                on_click=lambda _: self.on_complete() if self.on_complete else None,
+                visible=not self.is_forced
+            ),
         ]
 
         return ft.Container(

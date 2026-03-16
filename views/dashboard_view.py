@@ -479,7 +479,7 @@ class DashboardView:
         view = SecurityQuestionsView(
             self.page, self.auth, mode="setup",
             on_complete=lambda: self.on_navigate("dashboard"),
-            master_password="",  # No-op para re-configurar
+            is_update=True,
         )
         self.page.controls.clear()
         self.page.add(view.build())

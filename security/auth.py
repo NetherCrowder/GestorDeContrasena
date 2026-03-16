@@ -58,6 +58,14 @@ class AuthManager:
         questions = [(q, hash_answer(a)) for q, a in security_qa]
         self.db.save_security_questions(questions)
 
+    def update_security_questions(self, security_qa: list[tuple[str, str]]) -> None:
+        """
+        Actualiza las preguntas de seguridad sin tocar la contraseña maestra o el PIN.
+        security_qa: lista de (pregunta, respuesta)
+        """
+        questions = [(q, hash_answer(a)) for q, a in security_qa]
+        self.db.save_security_questions(questions)
+
     # ------------------------------------------------------------------ #
     #  Login con contraseña maestra
     # ------------------------------------------------------------------ #

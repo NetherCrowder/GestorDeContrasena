@@ -12,7 +12,7 @@ class SecurityQuestionsView:
 
     def __init__(self, page: ft.Page, auth_manager, mode: str = "setup",
                  on_complete: callable = None, master_password: str = "",
-                 pin: str = "", rotation_days: int = 90):
+                 pin: str = "", rotation_days: int = 90, is_update: bool = False):
         """
         mode: "setup" (registro) o "recovery" (recuperación)
         """
@@ -23,6 +23,7 @@ class SecurityQuestionsView:
         self.master_password = master_password
         self.pin = pin
         self.rotation_days = rotation_days
+        self.is_update = is_update
 
     def build(self) -> ft.Container:
         if self.mode == "setup":
@@ -90,7 +91,7 @@ class SecurityQuestionsView:
                     self.setup_error,
                     ft.Container(height=12),
                     ft.ElevatedButton(
-                        "Finalizar registro ✓",
+                        "Guardar cambios ✓" if self.is_update else "Finalizar registro ✓",
                         bgcolor=ft.Colors.CYAN_700,
                         color=ft.Colors.WHITE,
                         width=280,
@@ -99,6 +100,12 @@ class SecurityQuestionsView:
                             shape=ft.RoundedRectangleBorder(radius=12),
                         ),
                         on_click=self.on_setup_complete,
+                    ),
+                    ft.TextButton(
+                        "Regresar",
+                        style=ft.ButtonStyle(color=ft.Colors.WHITE54),
+                        on_click=lambda _: self.on_complete() if self.on_complete else None,
+                        visible=self.is_update
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -127,13 +134,17 @@ class SecurityQuestionsView:
             self.show_setup_error("Debes seleccionar al menos 3 preguntas")
             return
 
-        # Registrar usuario
-        self.auth.register(
-            master_password=self.master_password,
-            pin=self.pin,
-            security_qa=selected,
-            rotation_days=self.rotation_days,
-        )
+        if self.is_update:
+            # Solo actualizar preguntas
+            self.auth.update_security_questions(selected)
+        else:
+            # Registrar usuario nuevo (Borrando lo anterior si existe)
+            self.auth.register(
+                master_password=self.master_password,
+                pin=self.pin,
+                security_qa=selected,
+                rotation_days=self.rotation_days,
+            )
 
         if self.on_complete:
             self.on_complete()
