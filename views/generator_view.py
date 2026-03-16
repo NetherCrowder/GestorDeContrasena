@@ -28,7 +28,7 @@ class GeneratorView:
         
         if self.has_warehouse:
             self.db.cleanup_temp_passwords()
-            self._load_history()
+            self.load_history()
             if len(self.history_list.controls) == 0:
                 self.current_view = "generator"
 
@@ -39,7 +39,7 @@ class GeneratorView:
             self.generator_column.visible = (self.current_view == "generator")
         
         if view_name == "warehouse":
-            self._load_history()
+            self.load_history()
             
         if self._mounted:
             self.page.update()
@@ -53,7 +53,7 @@ class GeneratorView:
                 icon_color=ft.Colors.CYAN,
                 icon_size=20,
                 tooltip="Guardar en historial y volver",
-                on_click=self._save_current_to_history,
+                on_click=self.save_current_to_history,
             )
         else:
             suffix_btn = None
@@ -99,7 +99,7 @@ class GeneratorView:
                 ft.dropdown.Option(key, prof["label"])
                 for key, prof in PASSWORD_PROFILES.items()
             ],
-            on_select=self._on_profile_change,
+            on_select=self.on_profile_change,
             content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
         )
 
@@ -111,28 +111,28 @@ class GeneratorView:
             min=min_l, max=max_l, value=default_l,
             divisions=max(1, max_l - min_l),
             active_color=ft.Colors.CYAN, inactive_color=ft.Colors.WHITE24,
-            on_change=self._on_length_change,
+            on_change=self.on_length_change,
         )
 
         self.sw_upper = ft.Switch(
             label="Mayúsculas (A-Z)", value=self.rules.get("allow_uppercase", True),
             active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
-            on_change=lambda e: self._generate(),
+            on_change=lambda e: self.generate(),
         )
         self.sw_lower = ft.Switch(
             label="Minúsculas (a-z)", value=self.rules.get("allow_lowercase", True),
             active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
-            on_change=lambda e: self._generate(),
+            on_change=lambda e: self.generate(),
         )
         self.sw_numbers = ft.Switch(
             label="Números (0-9)", value=self.rules.get("allow_numbers", True),
             active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
-            on_change=lambda e: self._generate(),
+            on_change=lambda e: self.generate(),
         )
         self.sw_symbols = ft.Switch(
             label="Símbolos (!@#$...)", value=self.rules.get("allow_symbols", True),
             active_color=ft.Colors.CYAN, label_text_style=ft.TextStyle(color=ft.Colors.WHITE70, size=13),
-            on_change=lambda e: self._on_switch_change(),
+            on_change=lambda e: self.on_switch_change(),
         )
         self.symbols_input = ft.TextField(
             label="Símbolos específicos",
@@ -143,7 +143,7 @@ class GeneratorView:
             border_color=ft.Colors.WHITE10,
             focused_border_color=ft.Colors.CYAN,
             content_padding=ft.padding.symmetric(horizontal=12, vertical=8),
-            on_change=lambda e: self._generate(),
+            on_change=lambda e: self.generate(),
             visible=self.sw_symbols.value,
         )
 
@@ -164,11 +164,11 @@ class GeneratorView:
                     width=260,
                     height=44,
                     style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
-                    on_click=self._use_password,
+                    on_click=self.use_password,
                 ),
             ]
 
-        self._generate_silent()
+        self.generate_silent()
 
         # Vista 1: Almacén (Warehouse)
         self.warehouse_column = ft.Column(
@@ -243,7 +243,7 @@ class GeneratorView:
                         shape=ft.RoundedRectangleBorder(radius=12),
                         side=ft.BorderSide(1, ft.Colors.CYAN_700),
                     ),
-                    on_click=lambda e: self._generate(),
+                    on_click=lambda e: self.generate(),
                 ),
                 ft.Container(height=12),
                 self.profile_dropdown,
@@ -270,7 +270,7 @@ class GeneratorView:
             padding=ft.padding.all(24),
         )
 
-    def _on_profile_change(self, e):
+    def on_profile_change(self, e):
         profile_key = e.control.value
         profile = PASSWORD_PROFILES.get(profile_key, PASSWORD_PROFILES["estandar"])
         self.rules = profile.copy()
@@ -309,17 +309,17 @@ class GeneratorView:
 
         self.options_column.visible = is_custom or profile_key == "estandar"
 
-        self._generate()
+        self.generate()
 
-    def _on_switch_change(self):
+    def on_switch_change(self):
         self.symbols_input.visible = self.sw_symbols.value and (self.profile_dropdown.value == "estandar" or self.profile_dropdown.value == "personalizado")
-        self._generate()
+        self.generate()
 
-    def _on_length_change(self, e):
+    def on_length_change(self, e):
         self.length_label.value = f"Longitud: {int(e.control.value)}"
-        self._generate()
+        self.generate()
 
-    def _generate_silent(self):
+    def generate_silent(self):
         """Genera una contraseña y actualiza los widgets, SIN llamar page.update()."""
         length = int(self.length_slider.value) if hasattr(self, 'length_slider') else 16
         pin_only = self.rules.get("pin_only", False)
@@ -346,9 +346,9 @@ class GeneratorView:
             self.strength_label.value = f"Fortaleza: {label} ({score}%)"
             self.strength_label.color = color
 
-    def _generate(self):
+    def generate(self):
         """Genera una contraseña y actualiza la UI."""
-        self._generate_silent()
+        self.generate_silent()
         
         if self._mounted:
             try:
@@ -356,7 +356,7 @@ class GeneratorView:
             except Exception:
                 pass  # Control aún no montado
 
-    def _save_current_to_history(self, e):
+    def save_current_to_history(self, e):
         """Guarda la contraseña actual en el historial de forma manual."""
         if not self.on_use_password and self.db and self.auth and self.generated_password:
             from security.crypto import encrypt
@@ -391,7 +391,7 @@ class GeneratorView:
             except Exception as ex:
                 print(f"Error saving temp password: {ex}")
 
-    def _show_and_copy_password(self, e):
+    def show_and_copy_password(self, e):
         if not self.generated_password:
             return
             
@@ -413,11 +413,11 @@ class GeneratorView:
             
         self.page.run_task(restore_btn)
 
-    def _use_password(self, e):
+    def use_password(self, e):
         if self.on_use_password and self.generated_password:
-            self.on_use_password(self.generated_password, self._get_current_rules())
+            self.on_use_password(self.generated_password, self.get_current_rules())
 
-    def _get_current_rules(self) -> dict:
+    def get_current_rules(self) -> dict:
         return {
             "min_length": int(self.length_slider.min),
             "max_length": int(self.length_slider.max),
@@ -432,7 +432,7 @@ class GeneratorView:
     # ------------------------------------------------------------------ #
     #  Historial Temporal
     # ------------------------------------------------------------------ #
-    def _load_history(self):
+    def load_history(self):
         if not self.db or not self.auth:
             return
             
@@ -500,14 +500,14 @@ class GeneratorView:
             except Exception:
                 continue
 
-    def _delete_history(self, temp_id: int):
+    def delete_history(self, temp_id: int):
         if not self.db:
             return
         self.db.delete_temp_password(temp_id)
-        self._load_history()
+        self.load_history()
         self.page.update()
                 
-    def _show_and_copy_history(self, text, icon_btn):
+    def show_and_copy_history(self, text, icon_btn):
         if not text:
             return
         

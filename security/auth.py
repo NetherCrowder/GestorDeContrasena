@@ -18,6 +18,10 @@ class AuthManager:
         self.db = db
         self._key: bytes | None = None  # Clave AES derivada (en memoria)
 
+    def get_user_questions(self) -> list[dict]:
+        """Devuelve la lista de preguntas de seguridad del usuario."""
+        return self.db.get_security_questions()
+
     @property
     def key(self) -> bytes | None:
         return self._key

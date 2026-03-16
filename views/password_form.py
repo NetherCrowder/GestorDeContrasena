@@ -78,7 +78,7 @@ class PasswordFormView:
             color=ft.Colors.WHITE, cursor_color=ft.Colors.CYAN, text_size=15,
             prefix_icon=ft.Icons.KEY,
             content_padding=ft.padding.symmetric(horizontal=16, vertical=14),
-            on_change=self._on_pass_change,
+            on_change=self.on_pass_change,
         )
 
         # Fortaleza
@@ -88,7 +88,7 @@ class PasswordFormView:
         )
         self.strength_label = ft.Text("", size=11, color=ft.Colors.WHITE54)
         if pass_val:
-            self._update_strength(pass_val)
+            self.update_strength(pass_val)
 
         self.url_field = ft.TextField(
             label="URL (opcional)", value=url_val,
@@ -145,7 +145,7 @@ class PasswordFormView:
                                 "Generar",
                                 icon=ft.Icons.AUTO_AWESOME,
                                 style=ft.ButtonStyle(color=ft.Colors.CYAN),
-                                on_click=self._open_generator,
+                                on_click=self.open_generator,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -163,7 +163,7 @@ class PasswordFormView:
                         width=260,
                         height=48,
                         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
-                        on_click=self._on_save,
+                        on_click=self.save_password,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -175,10 +175,10 @@ class PasswordFormView:
             padding=ft.padding.symmetric(horizontal=24, vertical=16),
         )
 
-    def _on_pass_change(self, e):
-        self._update_strength(e.control.value)
+    def on_pass_change(self, e):
+        self.update_strength(e.control.value)
 
-    def _update_strength(self, password: str):
+    def update_strength(self, password: str):
         if password:
             score, label = password_strength(password)
             color = strength_color(score)
@@ -191,7 +191,7 @@ class PasswordFormView:
             self.strength_label.value = ""
         self.page.update()
 
-    def _open_generator(self, e):
+    def open_generator(self, e):
         """Abre el generador en un bottom sheet."""
         from views.generator_view import GeneratorView
 
@@ -207,7 +207,7 @@ class PasswordFormView:
         gen = GeneratorView(
             self.page,
             initial_rules=rules,
-            on_use_password=self._use_generated_password,
+            on_use_password=self.use_generated_password,
         )
 
         bs = ft.BottomSheet(
@@ -223,31 +223,31 @@ class PasswordFormView:
         self._current_sheet = bs
         self.page.update()
 
-    def _use_generated_password(self, password: str, rules: dict):
+    def use_generated_password(self, password: str, rules: dict):
         self.pass_field.value = password
         self.current_rules = rules
-        self._update_strength(password)
+        self.update_strength(password)
         # Cerrar bottom sheet
         if hasattr(self, '_current_sheet'):
             self._current_sheet.open = False
             self.page.update()
 
-    def _on_save(self, e):
+    def save_password(self, e):
         from security.crypto import encrypt
 
         title = self.title_field.value
         if not title or not title.strip():
-            self._show_error("El nombre del servicio es obligatorio")
+            self.show_error("El nombre del servicio es obligatorio")
             return
 
         password = self.pass_field.value
         if not password:
-            self._show_error("La contraseña es obligatoria")
+            self.show_error("La contraseña es obligatoria")
             return
 
         key = self.auth.key
         if not key:
-            self._show_error("Error de autenticación. Reinicia la app.")
+            self.show_error("Error de autenticación. Reinicia la app.")
             return
 
         username_enc = encrypt(self.user_field.value or "", key)
@@ -289,7 +289,7 @@ class PasswordFormView:
         if self.on_save:
             self.on_save()
 
-    def _show_error(self, msg):
+    def show_error(self, msg):
         self.error_text.value = msg
         self.error_text.visible = True
         self.page.update()

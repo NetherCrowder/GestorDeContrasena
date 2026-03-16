@@ -18,14 +18,14 @@ class LoginView:
 
     def build(self) -> ft.Container:
         if self.is_register:
-            return self._build_register()
+            return self.build_register()
         else:
-            return self._build_login()
+            return self.build_login()
 
     # ------------------------------------------------------------------ #
     #  Login
     # ------------------------------------------------------------------ #
-    def _build_login(self) -> ft.Container:
+    def build_login(self) -> ft.Container:
         self.pin_field = ft.TextField(
             hint_text="PIN de 6 dígitos",
             hint_style=ft.TextStyle(color=ft.Colors.WHITE38),
@@ -60,12 +60,12 @@ class LoginView:
         self.show_master_btn = ft.TextButton(
             "Usar contraseña maestra",
             style=ft.ButtonStyle(color=ft.Colors.CYAN),
-            on_click=self._toggle_login_mode,
+            on_click=self.toggle_login_mode,
         )
         self.forgot_btn = ft.TextButton(
             "¿Olvidaste tu contraseña?",
             style=ft.ButtonStyle(color=ft.Colors.AMBER),
-            on_click=lambda e: self._show_recovery(),
+            on_click=lambda e: self.show_recovery(),
             visible=False,
         )
 
@@ -108,7 +108,7 @@ class LoginView:
                         style=ft.ButtonStyle(
                             shape=ft.RoundedRectangleBorder(radius=12),
                         ),
-                        on_click=self._on_login,
+                        on_click=self.on_login,
                     ),
                     self.show_master_btn,
                     self.forgot_btn,
@@ -122,7 +122,7 @@ class LoginView:
             padding=ft.padding.symmetric(horizontal=32, vertical=16),
         )
 
-    def _toggle_login_mode(self, e):
+    def toggle_login_mode(self, e):
         self.pin_field.visible = not self.pin_field.visible
         self.master_field.visible = not self.master_field.visible
         if self.master_field.visible:
@@ -131,26 +131,26 @@ class LoginView:
             self.show_master_btn.text = "Usar contraseña maestra"
         self.page.update()
 
-    def _on_login(self, e):
+    def on_login(self, e):
         self.error_text.visible = False
 
         if self.master_field.visible:
             # Login con contraseña maestra
             password = self.master_field.value
             if not password:
-                self._show_error("Ingresa tu contraseña maestra")
+                self.show_error("Ingresa tu contraseña maestra")
                 return
             if self.auth.login_master(password):
                 self.on_login_success()
             else:
-                self._show_error("Contraseña incorrecta")
+                self.show_error("Contraseña incorrecta")
                 self.forgot_btn.visible = True
                 self.page.update()
         else:
             # Login con PIN
             pin = self.pin_field.value
             if not pin or len(pin) != 6:
-                self._show_error("El PIN debe tener 6 dígitos")
+                self.show_error("El PIN debe tener 6 dígitos")
                 return
             if self.auth.login_pin(pin):
                 self.on_login_success()
@@ -158,21 +158,21 @@ class LoginView:
                 self.pin_attempts += 1
                 remaining = self.max_pin_attempts - self.pin_attempts
                 if remaining <= 0:
-                    self._show_error("PIN bloqueado. Usa la contraseña maestra.")
+                    self.show_error("PIN bloqueado. Usa la contraseña maestra.")
                     self.pin_field.visible = False
                     self.master_field.visible = True
                     self.show_master_btn.visible = False
                     self.forgot_btn.visible = True
                 else:
-                    self._show_error(f"PIN incorrecto. {remaining} intentos restantes.")
+                    self.show_error(f"PIN incorrecto. {remaining} intentos restantes.")
                 self.page.update()
 
-    def _show_error(self, msg: str):
+    def show_error(self, msg: str):
         self.error_text.value = msg
         self.error_text.visible = True
         self.page.update()
 
-    def _show_recovery(self):
+    def show_recovery(self):
         from views.security_questions import SecurityQuestionsView
         recovery_view = SecurityQuestionsView(
             self.page, self.auth, mode="recovery",
@@ -185,7 +185,7 @@ class LoginView:
     # ------------------------------------------------------------------ #
     #  Registro
     # ------------------------------------------------------------------ #
-    def _build_register(self) -> ft.Container:
+    def build_register(self) -> ft.Container:
         self.reg_password = ft.TextField(
             label="Contraseña maestra",
             hint_text="Mín. 8 caracteres",
@@ -281,7 +281,7 @@ class LoginView:
                         style=ft.ButtonStyle(
                             shape=ft.RoundedRectangleBorder(radius=12),
                         ),
-                        on_click=self._on_register_step1,
+                        on_click=self.on_register_step1,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -293,19 +293,19 @@ class LoginView:
             padding=ft.padding.symmetric(horizontal=32, vertical=16),
         )
 
-    def _on_register_step1(self, e):
+    def on_register_step1(self, e):
         pw = self.reg_password.value
         confirm = self.reg_confirm.value
         pin = self.reg_pin.value
 
         if not pw or len(pw) < 8:
-            self._show_reg_error("La contraseña debe tener al menos 8 caracteres")
+            self.show_reg_error("La contraseña debe tener al menos 8 caracteres")
             return
         if pw != confirm:
-            self._show_reg_error("Las contraseñas no coinciden")
+            self.show_reg_error("Las contraseñas no coinciden")
             return
         if not pin or len(pin) != 6 or not pin.isdigit():
-            self._show_reg_error("El PIN debe ser de 6 dígitos numéricos")
+            self.show_reg_error("El PIN debe ser de 6 dígitos numéricos")
             return
 
         # Ir al paso de preguntas de seguridad
@@ -322,7 +322,7 @@ class LoginView:
         self.page.add(sq_view.build())
         self.page.update()
 
-    def _show_reg_error(self, msg: str):
+    def show_reg_error(self, msg: str):
         self.reg_error.value = msg
         self.reg_error.visible = True
         self.page.update()

@@ -127,7 +127,7 @@ class ChangePasswordView:
                 width=280,
                 height=48,
                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
-                on_click=self._on_change,
+                on_click=self.on_change,
             ),
         ]
 
@@ -143,19 +143,19 @@ class ChangePasswordView:
             padding=ft.padding.symmetric(horizontal=32, vertical=16),
         )
 
-    def _on_change(self, e):
+    def on_change(self, e):
         new = self.new_pw.value
         confirm = self.confirm_pw.value
         pin = self.new_pin.value
 
         if not new or len(new) < 8:
-            self._show_error("La contraseña debe tener al menos 8 caracteres")
+            self.show_error("La contraseña debe tener al menos 8 caracteres")
             return
         if new != confirm:
-            self._show_error("Las contraseñas no coinciden")
+            self.show_error("Las contraseñas no coinciden")
             return
         if not pin or len(pin) != 6 or not pin.isdigit():
-            self._show_error("El PIN debe ser de 6 dígitos numéricos")
+            self.show_error("El PIN debe ser de 6 dígitos numéricos")
             return
 
         if self.is_forced:
@@ -163,7 +163,7 @@ class ChangePasswordView:
         else:
             old = self.old_pw.value
             if not old:
-                self._show_error("Ingresa tu contraseña actual")
+                self.show_error("Ingresa tu contraseña actual")
                 return
             success = self.auth.change_master_password(old, new, pin)
 
@@ -171,9 +171,9 @@ class ChangePasswordView:
             if self.on_complete:
                 self.on_complete()
         else:
-            self._show_error("La contraseña actual es incorrecta")
+            self.show_error("La contraseña actual es incorrecta")
 
-    def _show_error(self, msg):
+    def show_error(self, msg):
         self.error_text.value = msg
         self.error_text.visible = True
         self.success_text.visible = False

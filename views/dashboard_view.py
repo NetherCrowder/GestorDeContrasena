@@ -6,7 +6,13 @@ import flet as ft
 from components.category_tile import create_category_tile
 from components.search_bar import create_search_bar
 from components.password_card import create_password_card
-from security.crypto import decrypt
+from security.crypto import decrypt, encrypt
+from utils.backup import (
+    get_backup_path, list_backups, export_passwords,
+    get_backup_metadata, import_passwords
+)
+import os
+import random
 
 
 class DashboardView:
@@ -30,7 +36,7 @@ class DashboardView:
         cat_tiles = []
         for cat in categories:
             count = counts.get(cat["id"], 0)
-            tile = create_category_tile(cat, count, self._on_category_click)
+            tile = create_category_tile(cat, count, self.on_category_click)
             cat_tiles.append(tile)
 
         self.categories_grid = ft.GridView(
@@ -51,12 +57,12 @@ class DashboardView:
             cat = cat_map.get(pw.get("category_id"), None)
             card = create_password_card(
                 pw, cat,
-                on_copy_user=self._show_and_copy_user,
-                on_copy_pass=self._show_and_copy_pass,
-                on_edit=self._edit_password,
-                on_delete=self._delete_password,
-                on_favorite=self._toggle_favorite,
-                on_open_url=self._open_url,
+                on_copy_user=self.show_and_copy_user,
+                on_copy_pass=self.show_and_copy_pass,
+                on_edit=self.edit_password,
+                on_delete=self.delete_password,
+                on_favorite=self.toggle_favorite,
+                on_open_url=self.open_url,
             )
             fav_cards.append(card)
 
@@ -88,7 +94,7 @@ class DashboardView:
                     ],
                 ),
                 ft.Container(height=4),
-                create_search_bar(self._on_search),
+                create_search_bar(self.on_search),
                 self.search_results,
                 ft.Container(height=8),
                 ft.Text("Categorías", size=16, weight=ft.FontWeight.W_600,
@@ -131,20 +137,30 @@ class DashboardView:
                 ft.Text("Configuración", size=20, weight=ft.FontWeight.W_700,
                          color=ft.Colors.WHITE),
                 ft.Container(height=12),
-                self._settings_card(
+                self.settings_card(
                     ft.Icons.LOCK_RESET, "Cambiar contraseña maestra",
                     f"Próximo cambio en {self.auth.days_until_rotation()} días",
-                    self._change_password,
+                    self.change_password,
                 ),
-                self._settings_card(
+                self.settings_card(
                     ft.Icons.HELP_OUTLINE, "Preguntas de seguridad",
                     "Configurar preguntas de recuperación",
-                    self._edit_security_questions,
+                    self.edit_security_questions,
                 ),
-                self._settings_card(
+                self.settings_card(
                     ft.Icons.TIMER, "Rotación de contraseña",
                     f"Cada {self.db.get_config('password_rotation_days') or '90'} días",
-                    self._change_rotation,
+                    self.change_rotation,
+                ),
+                self.settings_card(
+                    ft.Icons.SAVE_ALT, "Salvar KeyVault",
+                    "Exportar a archivo seguro (.vk)",
+                    self.start_export,
+                ),
+                self.settings_card(
+                    ft.Icons.RESTORE, "Restaurar KeyVault",
+                    "Importar desde archivo seguro (.vk)",
+                    self.start_import,
                 ),
                 ft.Container(height=20),
                 ft.ElevatedButton(
@@ -202,10 +218,8 @@ class DashboardView:
                 ),
             ],
             selected_index=0,
-            on_change=self._on_tab_change,
-            bgcolor="#16213e",
-            indicator_color=ft.Colors.CYAN_700,
             label_behavior=ft.NavigationBarLabelBehavior.ALWAYS_SHOW,
+            on_change=self.on_tab_change,
         )
 
         # FAB
@@ -213,7 +227,7 @@ class DashboardView:
             icon=ft.Icons.ADD,
             bgcolor=ft.Colors.CYAN_700,
             foreground_color=ft.Colors.WHITE,
-            on_click=lambda e: self._add_password(),
+            on_click=lambda e: self.add_password(),
             mini=False,
         )
 
@@ -237,7 +251,7 @@ class DashboardView:
     # ------------------------------------------------------------------ #
     #  Tabs
     # ------------------------------------------------------------------ #
-    def _on_tab_change(self, e):
+    def on_tab_change(self, e):
         idx = e.control.selected_index
         if idx == 0:
             self.tab_content.content = self.home_content
@@ -249,7 +263,7 @@ class DashboardView:
             self.tab_content.content = gen.build()
         elif idx == 3:
             from views.audit_view import AuditView
-            audit = AuditView(self.page, self.db, self.auth, on_edit=self._edit_password)
+            audit = AuditView(self.page, self.db, self.auth, on_edit=self.edit_password)
             self.tab_content.content = audit.build()
         elif idx == 4:
             self.tab_content.content = self.settings_content
@@ -258,7 +272,7 @@ class DashboardView:
     # ------------------------------------------------------------------ #
     #  Búsqueda
     # ------------------------------------------------------------------ #
-    def _on_search(self, query: str):
+    def on_search(self, query: str):
         if not query or len(query) < 2:
             self.search_results.visible = False
             self.categories_grid.visible = True
@@ -276,12 +290,12 @@ class DashboardView:
             cat = categories.get(pw.get("category_id"))
             card = create_password_card(
                 pw, cat,
-                on_copy_user=self._show_and_copy_user,
-                on_copy_pass=self._show_and_copy_pass,
-                on_edit=self._edit_password,
-                on_delete=self._delete_password,
-                on_favorite=self._toggle_favorite,
-                on_open_url=self._open_url,
+                on_copy_user=self.show_and_copy_user,
+                on_copy_pass=self.show_and_copy_pass,
+                on_edit=self.edit_password,
+                on_delete=self.delete_password,
+                on_favorite=self.toggle_favorite,
+                on_open_url=self.open_url,
             )
             self.search_results.controls.append(card)
 
@@ -292,7 +306,7 @@ class DashboardView:
     # ------------------------------------------------------------------ #
     #  Acciones de contraseñas
     # ------------------------------------------------------------------ #
-    def _show_and_copy_user(self, e, pw_id):
+    def show_and_copy_user(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
@@ -317,7 +331,7 @@ class DashboardView:
                 
             self.page.run_task(restore_btn)
 
-    def _show_and_copy_pass(self, e, pw_id):
+    def show_and_copy_pass(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
@@ -342,7 +356,7 @@ class DashboardView:
                 
             self.page.run_task(restore_btn)
 
-    def _open_url(self, pw_id):
+    def open_url(self, pw_id):
         async def launch():
             pw = self.db.get_password_by_id(pw_id)
             if pw and pw.get("url"):
@@ -358,13 +372,13 @@ class DashboardView:
         
         self.page.run_task(launch)
 
-    def _toggle_favorite(self, pw_id):
+    def toggle_favorite(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw:
             self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
             self.on_navigate("dashboard")
 
-    def _edit_password(self, pw_id):
+    def edit_password(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw:
             from views.password_form import PasswordFormView
@@ -379,7 +393,7 @@ class DashboardView:
             self.page.add(form.build())
             self.page.update()
 
-    def _delete_password(self, pw_id):
+    def delete_password(self, pw_id):
         def close_dialog():
             dialog.open = False
             self.page.update()
@@ -410,7 +424,7 @@ class DashboardView:
         self.page.overlay.append(dialog)
         self.page.update()
 
-    def _add_password(self):
+    def add_password(self):
         from views.password_form import PasswordFormView
         form = PasswordFormView(
             self.page, self.db, self.auth,
@@ -422,27 +436,35 @@ class DashboardView:
         self.page.add(form.build())
         self.page.update()
 
-    def _on_category_click(self, category_id: int):
+    def on_category_click(self, category_id: int):
         self.on_navigate("passwords", category_id=category_id)
 
     # ------------------------------------------------------------------ #
     #  Settings
     # ------------------------------------------------------------------ #
-    def _settings_card(self, icon, title, subtitle, on_click) -> ft.Container:
+    def settings_card(self, icon, title, subtitle, on_click) -> ft.Container:
+        import asyncio
+
+        def handle_click(e):
+            if asyncio.iscoroutinefunction(on_click):
+                self.page.run_task(on_click, e)
+            else:
+                on_click(e)
+
         return ft.Container(
             content=ft.ListTile(
                 leading=ft.Icon(icon, color=ft.Colors.CYAN),
                 title=ft.Text(title, color=ft.Colors.WHITE, size=14),
                 subtitle=ft.Text(subtitle, color=ft.Colors.WHITE54, size=12),
                 trailing=ft.Icon(ft.Icons.CHEVRON_RIGHT, color=ft.Colors.WHITE38),
-                on_click=lambda e: on_click(),
+                on_click=handle_click,
             ),
             bgcolor="#1e2a3a",
             border_radius=14,
             border=ft.border.all(1, ft.Colors.WHITE10),
         )
 
-    def _change_password(self):
+    def change_password(self, e=None):
         from views.change_password import ChangePasswordView
         view = ChangePasswordView(
             self.page, self.auth,
@@ -452,7 +474,7 @@ class DashboardView:
         self.page.add(view.build())
         self.page.update()
 
-    def _edit_security_questions(self):
+    def edit_security_questions(self, e=None):
         from views.security_questions import SecurityQuestionsView
         view = SecurityQuestionsView(
             self.page, self.auth, mode="setup",
@@ -463,7 +485,7 @@ class DashboardView:
         self.page.add(view.build())
         self.page.update()
 
-    def _change_rotation(self):
+    def change_rotation(self, e=None):
         current = self.db.get_config("password_rotation_days") or "90"
 
         dd = ft.Dropdown(
@@ -508,4 +530,251 @@ class DashboardView:
         )
         dialog.open = True
         self.page.overlay.append(dialog)
+        self.page.update()
+
+    # ------------------------------------------------------------------ #
+    #  Backup (Export / Import)
+    # ------------------------------------------------------------------ #
+    def start_export(self, e):
+        """Inicia el proceso de exportación con la Bóveda Binaria."""
+        questions = self.auth.get_user_questions()
+        if not questions:
+            self.show_snackbar("Debes configurar preguntas de seguridad primero.")
+            return
+
+        name_field = ft.TextField(
+            label="Nombre personalizado (opcional)",
+            hint_text="ej. mi_copia",
+            border_color=ft.Colors.CYAN,
+            color=ft.Colors.WHITE,
+        )
+
+        def close_dialog():
+            dialog.open = False
+            self.page.update()
+
+        def confirm_name(e):
+            custom_name = name_field.value.strip()
+            close_dialog()
+            self.export_ask_security(custom_name)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Respaldar KeyVault", color=ft.Colors.WHITE),
+            content=ft.Column([
+                ft.Text("Se guardará en tu carpeta de Documentos.", size=14, color=ft.Colors.WHITE70),
+                name_field
+            ], tight=True, spacing=10),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
+                ft.ElevatedButton("Continuar", bgcolor=ft.Colors.CYAN_700, on_click=confirm_name),
+            ]
+        )
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
+
+    def export_ask_security(self, custom_name):
+        """Selecciona una pregunta al azar y pide la respuesta para el cifrado."""
+        questions = self.auth.get_user_questions()
+        q_obj = random.choice(questions)
+        
+        answer_field = ft.TextField(
+            label="Respuesta de Seguridad",
+            password=True,
+            can_reveal_password=True,
+            border_color=ft.Colors.CYAN,
+            color=ft.Colors.WHITE,
+            autofocus=True,
+        )
+
+        def close_dialog():
+            dialog.open = False
+            self.page.update()
+
+        def process_export(e):
+            answer = answer_field.value.strip()
+            if not answer: return
+            
+            close_dialog()
+            
+            # Generar ruta y ejecutar
+            path = get_backup_path(custom_name)
+            passwords = self.db.get_all_passwords()
+            
+            success, exported, skipped = export_passwords(
+                path, passwords, self.auth.key, 
+                q_obj["question"], answer
+            )
+            
+            if success:
+                msg = f"✅ Respaldo guardado ({exported} contraseñas)"
+                if skipped > 0:
+                    msg += f". ⚠️ {skipped} omitidas por errores."
+                self.show_snackbar(msg)
+            else:
+                self.show_snackbar("❌ Error al exportar.")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Validar Seguridad", color=ft.Colors.WHITE),
+            content=ft.Column([
+                ft.Text("Esta respuesta cifrará tu backup.", size=13, color=ft.Colors.WHITE54),
+                ft.Text(q_obj["question"], size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                answer_field
+            ], tight=True, spacing=10),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
+                ft.ElevatedButton("Exportar Ahora", bgcolor=ft.Colors.CYAN_700, on_click=process_export),
+            ]
+        )
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
+
+    def start_import(self, e):
+        """Inicia el proceso de restauración buscando archivos .vk en Documentos."""
+        backups = list_backups()
+        if not backups:
+            self.show_snackbar("No se encontraron archivos .vk en Documentos.")
+            return
+
+        def close_dialog():
+            dialog.open = False
+            self.page.update()
+
+        def select_file(path):
+            close_dialog()
+            self.import_unlock_and_ask(path)
+
+        # Crear lista de botones para cada backup
+        backup_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=200)
+        for path in backups:
+            name = os.path.basename(path)
+            backup_list.controls.append(
+                ft.ListTile(
+                    leading=ft.Icon(ft.Icons.FILE_PRESENT, color=ft.Colors.CYAN),
+                    title=ft.Text(name, size=14, color=ft.Colors.WHITE),
+                    on_click=lambda _, p=path: select_file(p)
+                )
+            )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Seleccionar Respaldo", color=ft.Colors.WHITE),
+            content=backup_list,
+            bgcolor="#1e2a3a",
+            actions=[ft.TextButton("Cerrar", on_click=lambda _: close_dialog())]
+        )
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
+
+    def import_unlock_and_ask(self, path):
+        """Abre el binario y pide la respuesta para descifrar."""
+        meta = get_backup_metadata(path)
+        if not meta:
+            self.show_snackbar("❌ El archivo está dañado o no es válido.")
+            return
+
+        answer_field = ft.TextField(
+            label="Tu Respuesta",
+            password=True,
+            can_reveal_password=True,
+            border_color=ft.Colors.CYAN,
+            color=ft.Colors.WHITE,
+            autofocus=True,
+        )
+
+        def close_dialog():
+            dialog.open = False
+            self.page.update()
+
+        def do_import(e):
+            ans = answer_field.value.strip()
+            if not ans: return
+            
+            close_dialog()
+            imported_data = import_passwords(meta, ans)
+            
+            if imported_data is None:
+                self.show_snackbar("❌ Respuesta incorrecta.")
+                return
+                
+            # 1. Mapear datos actuales por (título, usuario, categoría) para actualización inteligente
+            current_passwords = self.db.get_all_passwords()
+            # Mapa: (titulo, usuario, cat_id) -> id_registro
+            existing_map = {}
+            for lp in current_passwords:
+                u = decrypt(lp["username"], self.auth.key) if lp["username"] else ""
+                existing_map[(lp["title"], u, lp["category_id"])] = lp["id"]
+
+            # 2. Integrar a la DB con actualización inteligente
+            new_count = 0
+            updated_count = 0
+            
+            all_cats = self.db.get_all_categories()
+            valid_ids = [c["id"] for c in all_cats]
+
+            for item in imported_data:
+                # Validar categoría
+                cat_id = item.get("category_id", 8)
+                if cat_id not in valid_ids: cat_id = 8
+
+                # Identificador único de lógica (Servicio + Usuario + Categoría)
+                key = (item["title"], item["username"], cat_id)
+                
+                # Cifrar datos del backup con la clave maestra actual
+                enc_user = encrypt(item["username"], self.auth.key)
+                enc_pass = encrypt(item["password"], self.auth.key)
+                enc_note = encrypt(item["notes"], self.auth.key) if item.get("notes") else b""
+
+                if key in existing_map:
+                    # ACTUALIZAR existente
+                    pw_id = existing_map[key]
+                    self.db.update_password(
+                        pw_id,
+                        password=enc_pass,
+                        notes=enc_note,
+                        url=item.get("url", "")
+                    )
+                    updated_count += 1
+                else:
+                    # CREAR nuevo
+                    self.db.add_password(
+                        title=item["title"],
+                        username=enc_user,
+                        password=enc_pass,
+                        url=item.get("url", ""),
+                        notes=enc_note,
+                        category_id=cat_id
+                    )
+                    new_count += 1
+            
+            msg = f"✅ Restauración finalizada."
+            if new_count > 0: msg += f" {new_count} nuevas."
+            if updated_count > 0: msg += f" {updated_count} actualizadas."
+            
+            self.show_snackbar(msg)
+            self.on_navigate("dashboard")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Restaurar Datos", color=ft.Colors.WHITE),
+            content=ft.Column([
+                ft.Text("Pregunta del archivo:", size=13, color=ft.Colors.WHITE54),
+                ft.Text(meta["question_text"], size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                answer_field
+            ], tight=True, spacing=10),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
+                ft.ElevatedButton("Restaurar", bgcolor=ft.Colors.CYAN_700, on_click=do_import),
+            ]
+        )
+        dialog.open = True
+        self.page.overlay.append(dialog)
+        self.page.update()
+
+    def show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg, color=ft.Colors.WHITE), bgcolor="#333333")
+        self.page.snack_bar.open = True
         self.page.update()

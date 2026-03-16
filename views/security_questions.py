@@ -26,14 +26,14 @@ class SecurityQuestionsView:
 
     def build(self) -> ft.Container:
         if self.mode == "setup":
-            return self._build_setup()
+            return self.build_setup()
         else:
-            return self._build_recovery()
+            return self.build_recovery()
 
     # ------------------------------------------------------------------ #
     #  Configuración (Registro)
     # ------------------------------------------------------------------ #
-    def _build_setup(self) -> ft.Container:
+    def build_setup(self) -> ft.Container:
         self.question_fields = []
         question_widgets = []
 
@@ -56,7 +56,7 @@ class SecurityQuestionsView:
                 visible=False,
             )
             # Vincular checkbox con campo de respuesta
-            cb.on_change = lambda e, a=answer: self._toggle_answer(e, a)
+            cb.on_change = lambda e, a=answer: self.toggle_answer(e, a)
             self.question_fields.append((cb, answer, question))
             question_widgets.append(
                 ft.Container(
@@ -98,7 +98,7 @@ class SecurityQuestionsView:
                         style=ft.ButtonStyle(
                             shape=ft.RoundedRectangleBorder(radius=12),
                         ),
-                        on_click=self._on_setup_complete,
+                        on_click=self.on_setup_complete,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -110,21 +110,21 @@ class SecurityQuestionsView:
             padding=ft.padding.symmetric(horizontal=24, vertical=16),
         )
 
-    def _toggle_answer(self, e, answer_field: ft.TextField):
+    def toggle_answer(self, e, answer_field: ft.TextField):
         answer_field.visible = e.control.value
         self.page.update()
 
-    def _on_setup_complete(self, e):
+    def on_setup_complete(self, e):
         selected = []
         for cb, answer, question in self.question_fields:
             if cb.value:
                 if not answer.value or not answer.value.strip():
-                    self._show_setup_error(f"Responde la pregunta: {question[:40]}...")
+                    self.show_setup_error(f"Responde la pregunta: {question[:40]}...")
                     return
                 selected.append((question, answer.value.strip()))
 
         if len(selected) < 3:
-            self._show_setup_error("Debes seleccionar al menos 3 preguntas")
+            self.show_setup_error("Debes seleccionar al menos 3 preguntas")
             return
 
         # Registrar usuario
@@ -138,7 +138,7 @@ class SecurityQuestionsView:
         if self.on_complete:
             self.on_complete()
 
-    def _show_setup_error(self, msg):
+    def show_setup_error(self, msg):
         self.setup_error.value = msg
         self.setup_error.visible = True
         self.page.update()
@@ -146,7 +146,7 @@ class SecurityQuestionsView:
     # ------------------------------------------------------------------ #
     #  Recuperación
     # ------------------------------------------------------------------ #
-    def _build_recovery(self) -> ft.Container:
+    def build_recovery(self) -> ft.Container:
         questions = self.auth.db.get_security_questions()
         self.recovery_fields = []
         question_widgets = []
@@ -198,12 +198,12 @@ class SecurityQuestionsView:
                         style=ft.ButtonStyle(
                             shape=ft.RoundedRectangleBorder(radius=12),
                         ),
-                        on_click=self._on_recovery_verify,
+                        on_click=self.on_recovery_verify,
                     ),
                     ft.TextButton(
                         "← Volver al login",
                         style=ft.ButtonStyle(color=ft.Colors.WHITE54),
-                        on_click=lambda e: self._back_to_login(),
+                        on_click=lambda e: self.back_to_login(),
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -215,7 +215,7 @@ class SecurityQuestionsView:
             padding=ft.padding.symmetric(horizontal=24, vertical=16),
         )
 
-    def _on_recovery_verify(self, e):
+    def on_recovery_verify(self, e):
         answers = {}
         for qid, field in self.recovery_fields:
             if field.value and field.value.strip():
@@ -237,7 +237,7 @@ class SecurityQuestionsView:
             self.recovery_error.visible = True
             self.page.update()
 
-    def _back_to_login(self):
+    def back_to_login(self):
         from views.login_view import LoginView
         login = LoginView(self.page, self.auth, self.on_complete)
         self.page.controls.clear()

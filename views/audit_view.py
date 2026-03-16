@@ -43,7 +43,7 @@ class AuditView:
                         alignment=ft.MainAxisAlignment.CENTER
                     ),
                     ft.Text(
-                        self._get_score_msg(score),
+                        self.get_score_msg(score),
                         size=14, color=ft.Colors.WHITE54, text_align=ft.TextAlign.CENTER
                     )
                 ],
@@ -56,7 +56,7 @@ class AuditView:
         )
 
         # Recomendación Top
-        top_rec = self._get_top_recommendation(audit_results["processed_passwords"])
+        top_rec = self.get_top_recommendation(audit_results["processed_passwords"])
         top_rec_container = ft.Container(visible=False)
         if top_rec:
             top_rec_container = ft.Container(
@@ -90,7 +90,7 @@ class AuditView:
 
         for pw in audit_results["processed_passwords"]:
             for v in pw["analysis"]["vulnerabilities"]:
-                card = self._create_issue_card(pw, v)
+                card = self.create_issue_card(pw, v)
                 if v["severity"] == "high": critical.append(card)
                 elif v["severity"] == "medium": moderate.append(card)
                 else: minor.append(card)
@@ -113,13 +113,13 @@ class AuditView:
             )
         else:
             if critical:
-                vulnerabilities_list.controls.append(self._section_title("Riesgo Crítico", ft.Colors.RED_400))
+                vulnerabilities_list.controls.append(self.section_title("Riesgo Crítico", ft.Colors.RED_400))
                 vulnerabilities_list.controls.extend(critical)
             if moderate:
-                vulnerabilities_list.controls.append(self._section_title("Riesgo Moderado", ft.Colors.ORANGE_400))
+                vulnerabilities_list.controls.append(self.section_title("Riesgo Moderado", ft.Colors.ORANGE_400))
                 vulnerabilities_list.controls.extend(moderate)
             if minor:
-                vulnerabilities_list.controls.append(self._section_title("Riesgo Menor", ft.Colors.CYAN_700))
+                vulnerabilities_list.controls.append(self.section_title("Riesgo Menor", ft.Colors.CYAN_700))
                 vulnerabilities_list.controls.extend(minor)
 
         return ft.Container(
@@ -139,7 +139,7 @@ class AuditView:
             expand=True
         )
 
-    def _get_top_recommendation(self, processed_passwords: list[dict]) -> str | None:
+    def get_top_recommendation(self, processed_passwords: list[dict]) -> str | None:
         """Encuentra el problema más grave y retorna una recomendación."""
         high_severity = []
         for pw in processed_passwords:
@@ -158,13 +158,13 @@ class AuditView:
         top = high_severity[0]
         return f"En {top[0]['title']}: {top[1]['recommendation']}"
 
-    def _get_score_msg(self, score: int) -> str:
+    def get_score_msg(self, score: int) -> str:
         if score > 90: return "¡Excelente seguridad! Mantén tus contraseñas únicas."
         if score > 70: return "Buena seguridad, pero hay margen de mejora."
         if score > 50: return "Seguridad aceptable. Considera cambiar las contraseñas débiles."
         return "Atención requerida. Tienes vulnerabilidades críticas."
 
-    def _section_title(self, text: str, color) -> ft.Row:
+    def section_title(self, text: str, color) -> ft.Row:
         return ft.Row(
             [
                 ft.Container(width=4, height=16, bgcolor=color, border_radius=2),
@@ -173,7 +173,7 @@ class AuditView:
             margin=ft.margin.only(top=10, bottom=5)
         )
 
-    def _create_issue_card(self, pw: dict, v: dict) -> ft.Container:
+    def create_issue_card(self, pw: dict, v: dict) -> ft.Container:
         severity_color = {
             "high": ft.Colors.RED_400,
             "medium": ft.Colors.ORANGE_400,
@@ -194,7 +194,7 @@ class AuditView:
                 trailing=ft.IconButton(
                     icon=ft.Icons.EDIT_OUTLINED,
                     icon_color=ft.Colors.CYAN,
-                    on_click=lambda e: self._open_edit(pw["id"])
+                    on_click=lambda e: self.open_edit(pw["id"])
                 )
             ),
             bgcolor="#1e293b",
@@ -202,7 +202,7 @@ class AuditView:
             border=ft.border.all(1, ft.Colors.WHITE10)
         )
 
-    def _open_edit(self, pw_id):
+    def open_edit(self, pw_id):
         """Dispara la navegación hacia el formulario de edición."""
         if self.on_edit:
             self.on_edit(pw_id)

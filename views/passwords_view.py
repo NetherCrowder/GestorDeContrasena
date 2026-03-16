@@ -29,12 +29,12 @@ class PasswordsView:
             card = create_password_card(
                 pw_data=pw,
                 category=self.category,
-                on_copy_user=self._show_and_copy_user,
-                on_copy_pass=self._show_and_copy_pass,
-                on_edit=self._edit_password,
-                on_delete=self._delete_password,
-                on_favorite=self._toggle_favorite,
-                on_open_url=self._open_url,
+                on_copy_user=self.show_and_copy_user,
+                on_copy_pass=self.show_and_copy_pass,
+                on_edit=self.edit_password,
+                on_delete=self.delete_password,
+                on_favorite=self.toggle_favorite,
+                on_open_url=self.open_url,
             )
             cards.append(card)
 
@@ -80,7 +80,7 @@ class PasswordsView:
                                 icon_color=cat_color,
                                 icon_size=28,
                                 tooltip="Agregar contraseña",
-                                on_click=lambda e: self._add_password(),
+                                on_click=lambda e: self.add_password(),
                             ),
                         ],
                     ),
@@ -98,7 +98,7 @@ class PasswordsView:
             padding=ft.padding.symmetric(horizontal=16, vertical=12),
         )
 
-    def _show_and_copy_user(self, e, pw_id):
+    def show_and_copy_user(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
@@ -123,7 +123,7 @@ class PasswordsView:
                 
             self.page.run_task(restore_btn)
 
-    def _show_and_copy_pass(self, e, pw_id):
+    def show_and_copy_pass(self, e, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
@@ -148,7 +148,7 @@ class PasswordsView:
                 
             self.page.run_task(restore_btn)
 
-    def _open_url(self, pw_id):
+    def open_url(self, pw_id):
         async def launch():
             pw = self.db.get_password_by_id(pw_id)
             if pw and pw.get("url"):
@@ -164,13 +164,13 @@ class PasswordsView:
         
         self.page.run_task(launch)
 
-    def _toggle_favorite(self, pw_id):
+    def toggle_favorite(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw:
             self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
             self.on_refresh()
 
-    def _edit_password(self, pw_id):
+    def edit_password(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
         if pw:
             from views.password_form import PasswordFormView
@@ -185,7 +185,7 @@ class PasswordsView:
             self.page.add(form.build())
             self.page.update()
 
-    def _delete_password(self, pw_id):
+    def delete_password(self, pw_id):
         def close_dialog():
             dialog.open = False
             self.page.update()
@@ -219,7 +219,7 @@ class PasswordsView:
         self.page.overlay.append(dialog)
         self.page.update()
 
-    def _add_password(self):
+    def add_password(self):
         from views.password_form import PasswordFormView
         form = PasswordFormView(
             self.page, self.db, self.auth,
