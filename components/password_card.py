@@ -115,11 +115,11 @@ def create_password_card(
         padding=ft.padding.all(16),
         border=ft.border.all(1, f"{cat_color}30"),
         animate=ft.Animation(300, ft.AnimationCurve.EASE_IN_OUT),
-        on_hover=lambda e: _on_card_hover(e),
+        on_hover=lambda e: on_card_hover(e),
     )
 
 
-def _on_card_hover(e: ft.ControlEvent):
+def on_card_hover(e: ft.ControlEvent):
     """Efecto hover en la tarjeta."""
     container: ft.Container = e.control
     if e.data == "true":

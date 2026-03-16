@@ -6,7 +6,7 @@ import flet as ft
 from components.category_tile import create_category_tile
 from components.search_bar import create_search_bar
 from components.password_card import create_password_card
-from security.crypto import decrypt, encrypt
+from security.crypto import decrypt, encrypt, hash_answer
 from utils.backup import (
     get_backup_path, list_backups, export_passwords,
     get_backup_metadata, import_passwords
@@ -536,55 +536,22 @@ class DashboardView:
     #  Backup (Export / Import)
     # ------------------------------------------------------------------ #
     def start_export(self, e):
-        """Inicia el proceso de exportación con la Bóveda Binaria."""
+        """Inicia el proceso de exportación con la Bóveda Binaria (Cero-Interacción)."""
         questions = self.auth.get_user_questions()
         if not questions:
             self.show_snackbar("Debes configurar preguntas de seguridad primero.")
             return
 
+        # Seleccionar pregunta y hash de respuesta al azar automáticamente
+        q_obj = random.choice(questions)
+        answer_hash = q_obj["answer_hash"]
+
         name_field = ft.TextField(
-            label="Nombre personalizado (opcional)",
+            label="Nombre del backup (opcional)",
             hint_text="ej. mi_copia",
             border_color=ft.Colors.CYAN,
             color=ft.Colors.WHITE,
-        )
-
-        def close_dialog():
-            dialog.open = False
-            self.page.update()
-
-        def confirm_name(e):
-            custom_name = name_field.value.strip()
-            close_dialog()
-            self.export_ask_security(custom_name)
-
-        dialog = ft.AlertDialog(
-            title=ft.Text("Respaldar KeyVault", color=ft.Colors.WHITE),
-            content=ft.Column([
-                ft.Text("Se guardará en tu carpeta de Documentos.", size=14, color=ft.Colors.WHITE70),
-                name_field
-            ], tight=True, spacing=10),
-            bgcolor="#1e2a3a",
-            actions=[
-                ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
-                ft.ElevatedButton("Continuar", bgcolor=ft.Colors.CYAN_700, on_click=confirm_name),
-            ]
-        )
-        dialog.open = True
-        self.page.overlay.append(dialog)
-        self.page.update()
-
-    def export_ask_security(self, custom_name):
-        """Selecciona una pregunta al azar y pide la respuesta para el cifrado."""
-        questions = self.auth.get_user_questions()
-        q_obj = random.choice(questions)
-        
-        answer_field = ft.TextField(
-            label="Respuesta de Seguridad",
-            password=True,
-            can_reveal_password=True,
-            border_color=ft.Colors.CYAN,
-            color=ft.Colors.WHITE,
+            text_size=14,
             autofocus=True,
         )
 
@@ -593,35 +560,50 @@ class DashboardView:
             self.page.update()
 
         def process_export(e):
-            answer = answer_field.value.strip()
-            if not answer: return
-            
+            custom_name = name_field.value.strip()
             close_dialog()
             
             # Generar ruta y ejecutar
             path = get_backup_path(custom_name)
             passwords = self.db.get_all_passwords()
             
+            # Usar el hash de la respuesta para cifrar de forma transparente
             success, exported, skipped = export_passwords(
                 path, passwords, self.auth.key, 
-                q_obj["question"], answer
+                q_obj["question"], answer_hash
             )
             
             if success:
-                msg = f"✅ Respaldo guardado ({exported} contraseñas)"
-                if skipped > 0:
-                    msg += f". ⚠️ {skipped} omitidas por errores."
-                self.show_snackbar(msg)
+                # Mostrar éxito con ruta completa en un diálogo persistente
+                def close_success(_):
+                    success_dialog.open = False
+                    self.page.update()
+
+                success_dialog = ft.AlertDialog(
+                    title=ft.Text("✅ Exportación Exitosa", color=ft.Colors.CYAN),
+                    content=ft.Column([
+                        ft.Text(f"Se han salvado {exported} contraseñas."),
+                        ft.Container(height=10),
+                        ft.Text("Ruta del archivo:", size=12, weight=ft.FontWeight.BOLD),
+                        ft.Text(path, size=11, color=ft.Colors.WHITE70, selectable=True),
+                    ], tight=True),
+                    actions=[ft.TextButton("Entendido", on_click=close_success)],
+                    bgcolor="#1e2a3a",
+                )
+                self.page.overlay.append(success_dialog)
+                success_dialog.open = True
+                self.page.update()
+                print(f"Exportación exitosa: {path}")
             else:
                 self.show_snackbar("❌ Error al exportar.")
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Validar Seguridad", color=ft.Colors.WHITE),
+            title=ft.Text("Generar Backup Seguro", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
             content=ft.Column([
-                ft.Text("Esta respuesta cifrará tu backup.", size=13, color=ft.Colors.WHITE54),
-                ft.Text(q_obj["question"], size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                answer_field
-            ], tight=True, spacing=10),
+                ft.Text("Se creará una copia cifrada con tus parámetros de seguridad.", size=13, color=ft.Colors.WHITE54),
+                name_field,
+                ft.Text("El sistema usará una de tus respuestas de seguridad automáticamente.", size=11, color=ft.Colors.CYAN_200),
+            ], tight=True, spacing=12),
             bgcolor="#1e2a3a",
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
@@ -670,7 +652,7 @@ class DashboardView:
         self.page.update()
 
     def import_unlock_and_ask(self, path):
-        """Abre el binario y pide la respuesta para descifrar."""
+        """Abre el binario y pide la respuesta para descifrar con UI mejorada."""
         meta = get_backup_metadata(path)
         if not meta:
             self.show_snackbar("❌ El archivo está dañado o no es válido.")
@@ -682,6 +664,7 @@ class DashboardView:
             can_reveal_password=True,
             border_color=ft.Colors.CYAN,
             color=ft.Colors.WHITE,
+            text_size=14,
             autofocus=True,
         )
 
@@ -691,21 +674,26 @@ class DashboardView:
 
         def do_import(e):
             ans = answer_field.value.strip()
-            if not ans: return
+            if not ans:
+                answer_field.error_text = "Se requiere la respuesta"
+                answer_field.update()
+                return
             
             close_dialog()
-            imported_data = import_passwords(meta, ans)
+            # El backup se cifró con el hash de la respuesta, así que hasheamos la entrada
+            ans_hash = hash_answer(ans)
+            imported_data = import_passwords(meta, ans_hash)
             
             if imported_data is None:
-                self.show_snackbar("❌ Respuesta incorrecta.")
+                self.show_snackbar("❌ Respuesta incorrecta o archivo incompatible.")
                 return
                 
             # 1. Mapear datos actuales por (título, usuario, categoría) para actualización inteligente
             current_passwords = self.db.get_all_passwords()
-            # Mapa: (titulo, usuario, cat_id) -> id_registro
             existing_map = {}
             for lp in current_passwords:
                 u = decrypt(lp["username"], self.auth.key) if lp["username"] else ""
+                # Importante: usar la misma lógica de clave que en la inserción
                 existing_map[(lp["title"], u, lp["category_id"])] = lp["id"]
 
             # 2. Integrar a la DB con actualización inteligente
@@ -716,20 +704,16 @@ class DashboardView:
             valid_ids = [c["id"] for c in all_cats]
 
             for item in imported_data:
-                # Validar categoría
                 cat_id = item.get("category_id", 8)
                 if cat_id not in valid_ids: cat_id = 8
 
-                # Identificador único de lógica (Servicio + Usuario + Categoría)
                 key = (item["title"], item["username"], cat_id)
                 
-                # Cifrar datos del backup con la clave maestra actual
                 enc_user = encrypt(item["username"], self.auth.key)
                 enc_pass = encrypt(item["password"], self.auth.key)
                 enc_note = encrypt(item["notes"], self.auth.key) if item.get("notes") else b""
 
                 if key in existing_map:
-                    # ACTUALIZAR existente
                     pw_id = existing_map[key]
                     self.db.update_password(
                         pw_id,
@@ -739,7 +723,6 @@ class DashboardView:
                     )
                     updated_count += 1
                 else:
-                    # CREAR nuevo
                     self.db.add_password(
                         title=item["title"],
                         username=enc_user,
@@ -758,16 +741,17 @@ class DashboardView:
             self.on_navigate("dashboard")
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Restaurar Datos", color=ft.Colors.WHITE),
+            title=ft.Text("Restaurar Datos", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
             content=ft.Column([
-                ft.Text("Pregunta del archivo:", size=13, color=ft.Colors.WHITE54),
-                ft.Text(meta["question_text"], size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                answer_field
-            ], tight=True, spacing=10),
+                ft.Text("El archivo está protegido. Responde para desbloquear:", size=13, color=ft.Colors.WHITE54),
+                ft.Text(f"Pregunta: {meta['question_text']}", size=15, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                answer_field,
+                ft.Text("Los duplicados exactos se actualizarán automáticamente.", size=11, color=ft.Colors.WHITE38),
+            ], tight=True, spacing=12),
             bgcolor="#1e2a3a",
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _: close_dialog()),
-                ft.ElevatedButton("Restaurar", bgcolor=ft.Colors.CYAN_700, on_click=do_import),
+                ft.ElevatedButton("Restaurar ahora", bgcolor=ft.Colors.CYAN_700, on_click=do_import),
             ]
         )
         dialog.open = True

@@ -57,11 +57,11 @@ def create_category_tile(
         on_click=lambda e, cid=category["id"]: on_click(cid),
         ink=True,
         animate=ft.Animation(300, ft.AnimationCurve.EASE_IN_OUT),
-        on_hover=lambda e, c=color: _on_tile_hover(e, c),
+        on_hover=lambda e, c=color: on_tile_hover(e, c),
     )
 
 
-def _on_tile_hover(e: ft.ControlEvent, color: str):
+def on_tile_hover(e: ft.ControlEvent, color: str):
     container: ft.Container = e.control
     if e.data == "true":
         container.bgcolor = "#253545"

@@ -47,14 +47,14 @@ def main(page: ft.Page):
         page.overlay.clear()
 
         if view_name == "login":
-            login_view = LoginView(page, auth, on_login_success=lambda: _post_login())
+            login_view = LoginView(page, auth, on_login_success=lambda: post_login())
             page.add(login_view.build())
 
         elif view_name == "dashboard":
             dashboard = DashboardView(
                 page, db, auth,
                 on_navigate=lambda v, **kw: navigate(v, **kw),
-                on_logout=lambda: _logout(),
+                on_logout=lambda: logout(),
             )
             page.add(dashboard.build())
 
@@ -81,14 +81,14 @@ def main(page: ft.Page):
 
         page.update()
 
-    def _post_login():
+    def post_login():
         """Acciones post-login: verificar rotación y navegar."""
         if auth.needs_rotation():
             navigate("change_password", is_forced=True)
         else:
             navigate("dashboard")
 
-    def _logout():
+    def logout():
         """Cerrar sesión."""
         auth.lock()
         navigate("login")

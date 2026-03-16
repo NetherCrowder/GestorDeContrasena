@@ -30,11 +30,11 @@ class DatabaseManager:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA_SQL)
-        self._migrate_temp_passwords()
-        self._seed_categories()
+        self.migrate_temp_passwords()
+        self.seed_categories()
         self.conn.commit()
 
-    def _migrate_temp_passwords(self):
+    def migrate_temp_passwords(self):
         """Añade la columna 'name' a temp_passwords si no existe."""
         try:
             self.conn.execute("ALTER TABLE temp_passwords ADD COLUMN name TEXT DEFAULT 'Sin nombre'")
@@ -47,7 +47,7 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
 
-    def _seed_categories(self):
+    def seed_categories(self):
         """Inserta las categorías predefinidas si la tabla está vacía."""
         cur = self.conn.execute("SELECT COUNT(*) FROM categories")
         if cur.fetchone()[0] == 0:
