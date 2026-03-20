@@ -14,6 +14,12 @@ from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from security.crypto import decrypt as decrypt_master
 
+def get_base_data_path() -> Path:
+    """Retorna la ruta base en AppData/Local/KeyVault."""
+    base = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
 # Clave interna para el bloqueo binario del archivo
 APP_FIXED_KEY = hashlib.sha256(b"KeyVault_Internal_Binary_Lock_V1").digest()
 
@@ -28,23 +34,24 @@ ITERATIONS = 50_000
 #  Rutas y Descubrimiento
 # ------------------------------------------------------------------ #
 def get_backup_path(custom_name: str = "") -> str:
-    """Genera una ruta en Documentos con timestamp."""
+    """Genera una ruta en AppData/Local/KeyVault/backups con timestamp."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    documents = Path.home() / "Documents"
-    documents.mkdir(parents=True, exist_ok=True)
+    backup_dir = get_base_data_path() / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
     if custom_name:
         safe_name = "".join(c for c in custom_name if c.isalnum() or c in "._- ")
         filename = f"{safe_name}_{timestamp}.vk"
     else:
         filename = f"keyvault_{timestamp}.vk"
-    return str(documents / filename)
+    return str(backup_dir / filename)
 
 def list_backups() -> list[str]:
-    """Lista todos los archivos .vk en la carpeta Documentos."""
-    documents = Path.home() / "Documents"
-    if not documents.exists(): 
+    """Lista todos los archivos .vk en la carpeta AppData/Local/KeyVault/backups."""
+    backup_dir = get_base_data_path() / "backups"
+    if not backup_dir.exists(): 
         return []
-    return sorted([str(f) for f in documents.glob("*.vk")], reverse=True)
+    return sorted([str(f) for f in backup_dir.glob("*.vk")], reverse=True)
 
 # ------------------------------------------------------------------ #
 #  Criptografía Interna

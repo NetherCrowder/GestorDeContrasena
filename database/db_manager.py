@@ -8,16 +8,27 @@ import os
 import json
 from datetime import datetime
 from database.models import SCHEMA_SQL, DEFAULT_CATEGORIES
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class DatabaseManager:
     """Administrador central de la base de datos SQLite."""
 
     def __init__(self, db_path: str | None = None):
+        ic("DATABASE INIT: Starting DatabaseManager initialization...")
         if db_path is None:
-            # Ruta por defecto en el directorio de la app
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            db_path = os.path.join(base, "vault.db")
+            # En Android (o empaquetado Flet), el directorio de la app es de SOLO LECTURA.
+            # Debemos usar la variable garantizada de escritura de Flet:
+            app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+            if app_storage:
+                db_path = os.path.join(app_storage, "vault.db")
+                ic(f"DATABASE INIT: Android/Flet Storage Detected -> {db_path}")
+            else:
+                # Ruta por defecto en el directorio de la app (para Windows)
+                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                db_path = os.path.join(base, "vault.db")
+                ic(f"DATABASE INIT: Windows/Local Storage Detected -> {db_path}")
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
 
@@ -26,13 +37,32 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
     def connect(self):
         """Abre la conexión y crea las tablas si no existen."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.executescript(SCHEMA_SQL)
-        self.migrate_temp_passwords()
-        self.seed_categories()
-        self.conn.commit()
+        ic(f"DATABASE CONNECT: Attempting to connect to SQLite at {self.db_path}")
+        try:
+            # Asegurarse de que el directorio padre exista (en Android a veces flet_app_data está vacío/inexistente)
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir and not os.path.exists(db_dir):
+                ic(f"DATABASE CONNECT: Directory {db_dir} does not exist. Creating it...")
+                os.makedirs(db_dir, exist_ok=True)
+                
+            self.conn = sqlite3.connect(self.db_path)
+            ic("DATABASE CONNECT: Connection successful. Setting pragmas...")
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            ic("DATABASE CONNECT: Executing schema script...")
+            self.conn.executescript(SCHEMA_SQL)
+            ic("DATABASE CONNECT: Migrating temp passwords...")
+            self.migrate_temp_passwords()
+            ic("DATABASE CONNECT: Seeding categories...")
+            self.seed_categories()
+            self.conn.commit()
+            ic("DATABASE CONNECT: Database ready.")
+        except sqlite3.OperationalError as e:
+            register_error("DATABASE CRITICAL ERROR (Operational)", e)
+            raise RuntimeError(f"Fallo crítico conectando a SQLite: {e}")
+        except Exception as e:
+            register_error("DATABASE CRITICAL ERROR (General)", e)
+            raise RuntimeError(f"Fallo inesperado al inicializar la base de datos: {e}")
 
     def migrate_temp_passwords(self):
         """Añade la columna 'name' a temp_passwords si no existe."""

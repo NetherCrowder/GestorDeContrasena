@@ -3,6 +3,8 @@ change_password.py - Vista para cambiar la contraseña maestra.
 """
 
 import flet as ft
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class ChangePasswordView:
@@ -164,20 +166,25 @@ class ChangePasswordView:
             self.show_error("El PIN debe ser de 6 dígitos numéricos")
             return
 
-        if self.is_forced:
-            success = self.auth.force_change_password(new, pin)
-        else:
-            old = self.old_pw.value
-            if not old:
-                self.show_error("Ingresa tu contraseña actual")
-                return
-            success = self.auth.change_master_password(old, new, pin)
+        try:
+            if self.is_forced:
+                success = self.auth.force_change_password(new, pin)
+            else:
+                old = self.old_pw.value
+                if not old:
+                    self.show_error("Ingresa tu contraseña actual")
+                    return
+                success = self.auth.change_master_password(old, new, pin)
 
-        if success:
-            if self.on_complete:
-                self.on_complete()
-        else:
-            self.show_error("La contraseña actual es incorrecta")
+            if success:
+                ic("Master password changed successfully")
+                if self.on_complete:
+                    self.on_complete()
+            else:
+                self.show_error("La contraseña actual es incorrecta")
+        except Exception as ex:
+            register_error("Error during master password change", ex)
+            self.show_error("Error inesperado al cambiar la contraseña")
 
     def show_error(self, msg):
         self.error_text.value = msg

@@ -9,6 +9,8 @@ from security.crypto import (
     generate_salt, derive_key, encrypt, decrypt,
     hash_password, hash_answer,
 )
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class AuthManager:
@@ -94,8 +96,10 @@ class AuthManager:
                     bytes.fromhex(encrypted_master_hex), pin_key
                 )
                 self._key = derive_key(master_password, salt)
+                ic("PIN Login successful")
                 return True
-            except Exception:
+            except Exception as e:
+                register_error("PIN Login failed during decryption", e)
                 return False
         return False
 
@@ -148,38 +152,43 @@ class AuthManager:
         if not self.login_master(old_password):
             return False
 
-        old_key = self._key
-        salt = bytes.fromhex(self.db.get_config("salt"))
+        try:
+            old_key = self._key
+            salt = bytes.fromhex(self.db.get_config("salt"))
 
-        # Generar nuevo salt y clave
-        new_salt = generate_salt()
-        new_key = derive_key(new_password, new_salt)
+            # Generar nuevo salt y clave
+            new_salt = generate_salt()
+            new_key = derive_key(new_password, new_salt)
 
-        # Re-cifrar todas las contraseñas
-        all_passwords = self.db.get_all_passwords()
-        for pw in all_passwords:
-            decrypted_username = decrypt(pw["username"], old_key) if pw["username"] else ""
-            decrypted_password = decrypt(pw["password"], old_key) if pw["password"] else ""
-            decrypted_notes = decrypt(pw["notes"], old_key) if pw["notes"] else ""
+            # Re-cifrar todas las contraseñas
+            all_passwords = self.db.get_all_passwords()
+            for pw in all_passwords:
+                decrypted_username = decrypt(pw["username"], old_key) if pw["username"] else ""
+                decrypted_password = decrypt(pw["password"], old_key) if pw["password"] else ""
+                decrypted_notes = decrypt(pw["notes"], old_key) if pw["notes"] else ""
 
-            self.db.update_password(
-                pw["id"],
-                username=encrypt(decrypted_username, new_key),
-                password=encrypt(decrypted_password, new_key),
-                notes=encrypt(decrypted_notes, new_key),
-            )
+                self.db.update_password(
+                    pw["id"],
+                    username=encrypt(decrypted_username, new_key),
+                    password=encrypt(decrypted_password, new_key),
+                    notes=encrypt(decrypted_notes, new_key),
+                )
 
-        # Actualizar config
-        self.db.set_config("salt", new_salt.hex())
-        self.db.set_config("master_password_hash", hash_password(new_password))
-        self.db.set_config("pin_hash", hash_password(new_pin))
-        pin_key = derive_key(new_pin, new_salt)
-        encrypted_master = encrypt(new_password, pin_key)
-        self.db.set_config("pin_encrypted_master", encrypted_master.hex())
-        self.db.set_config("last_password_change", datetime.now().isoformat())
+            # Actualizar config
+            self.db.set_config("salt", new_salt.hex())
+            self.db.set_config("master_password_hash", hash_password(new_password))
+            self.db.set_config("pin_hash", hash_password(new_pin))
+            pin_key = derive_key(new_pin, new_salt)
+            encrypted_master = encrypt(new_password, pin_key)
+            self.db.set_config("pin_encrypted_master", encrypted_master.hex())
+            self.db.set_config("last_password_change", datetime.now().isoformat())
 
-        self._key = new_key
-        return True
+            self._key = new_key
+            ic("Master password change successful")
+            return True
+        except Exception as e:
+            register_error("Failed to change master password", e)
+            return False
 
     def force_change_password(self, new_password: str, new_pin: str) -> bool:
         """

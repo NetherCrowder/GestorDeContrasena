@@ -5,6 +5,8 @@ security_questions.py - Vista de configuración y recuperación por preguntas de
 import flet as ft
 from database.models import SECURITY_QUESTIONS_BANK
 from security.crypto import hash_answer
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class SecurityQuestionsView:
@@ -134,20 +136,26 @@ class SecurityQuestionsView:
             self.show_setup_error("Debes seleccionar al menos 3 preguntas")
             return
 
-        if self.is_update:
-            # Solo actualizar preguntas
-            self.auth.update_security_questions(selected)
-        else:
-            # Registrar usuario nuevo (Borrando lo anterior si existe)
-            self.auth.register(
-                master_password=self.master_password,
-                pin=self.pin,
-                security_qa=selected,
-                rotation_days=self.rotation_days,
-            )
+        try:
+            if self.is_update:
+                # Solo actualizar preguntas
+                self.auth.update_security_questions(selected)
+                ic("Security questions updated")
+            else:
+                # Registrar usuario nuevo (Borrando lo anterior si existe)
+                self.auth.register(
+                    master_password=self.master_password,
+                    pin=self.pin,
+                    security_qa=selected,
+                    rotation_days=self.rotation_days,
+                )
+                ic("User registration complete")
 
-        if self.on_complete:
-            self.on_complete()
+            if self.on_complete:
+                self.on_complete()
+        except Exception as ex:
+            register_error("Error during security setup/registration", ex)
+            self.show_setup_error("Error inesperado al guardar la configuración")
 
     def show_setup_error(self, msg):
         self.setup_error.value = msg
@@ -232,19 +240,26 @@ class SecurityQuestionsView:
             if field.value and field.value.strip():
                 answers[qid] = field.value.strip()
 
-        if self.auth.verify_security_answers(answers):
-            # Mostrar pantalla de cambio de contraseña
-            from views.change_password import ChangePasswordView
-            change_view = ChangePasswordView(
-                self.page, self.auth,
-                is_forced=True,
-                on_complete=self.on_complete,
-            )
-            self.page.controls.clear()
-            self.page.add(change_view.build())
-            self.page.update()
-        else:
-            self.recovery_error.value = "Respuestas incorrectas. Necesitas al menos 3 correctas."
+        try:
+            if self.auth.verify_security_answers(answers):
+                ic("Security answers verified successfully")
+                # Mostrar pantalla de cambio de contraseña
+                from views.change_password import ChangePasswordView
+                change_view = ChangePasswordView(
+                    self.page, self.auth,
+                    is_forced=True,
+                    on_complete=self.on_complete,
+                )
+                self.page.controls.clear()
+                self.page.add(change_view.build())
+                self.page.update()
+            else:
+                self.recovery_error.value = "Respuestas incorrectas. Necesitas al menos 3 correctas."
+                self.recovery_error.visible = True
+                self.page.update()
+        except Exception as ex:
+            register_error("Error during security recovery verification", ex)
+            self.recovery_error.value = "Error inesperado al verificar respuestas"
             self.recovery_error.visible = True
             self.page.update()
 

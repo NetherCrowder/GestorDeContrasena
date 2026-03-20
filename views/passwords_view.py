@@ -5,6 +5,8 @@ passwords_view.py - Vista de lista de contraseñas filtrada por categoría.
 import flet as ft
 from security.crypto import decrypt
 from components.password_card import create_password_card
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class PasswordsView:
@@ -165,10 +167,14 @@ class PasswordsView:
         self.page.run_task(launch)
 
     def toggle_favorite(self, pw_id):
-        pw = self.db.get_password_by_id(pw_id)
-        if pw:
-            self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
-            self.on_refresh()
+        try:
+            pw = self.db.get_password_by_id(pw_id)
+            if pw:
+                self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
+                ic(f"Toggled favorite for {pw_id}")
+                self.on_refresh()
+        except Exception as ex:
+            register_error(f"Error toggling favorite for {pw_id}", ex)
 
     def edit_password(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
@@ -191,15 +197,22 @@ class PasswordsView:
             self.page.update()
 
         def do_delete(e):
-            self.db.delete_password(pw_id)
-            close_dialog()
-            
-            async def refresh():
-                import asyncio
-                await asyncio.sleep(0.3)
-                self.on_refresh()
+            try:
+                self.db.delete_password(pw_id)
+                ic(f"Deleted password {pw_id}")
+                close_dialog()
                 
-            self.page.run_task(refresh)
+                async def refresh():
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    self.on_refresh()
+                    
+                self.page.run_task(refresh)
+            except Exception as ex:
+                register_error(f"Error deleting password {pw_id}", ex)
+                self.page.snack_bar = ft.SnackBar(ft.Text("Error al eliminar"))
+                self.page.snack_bar.open = True
+                self.page.update()
 
         dialog = ft.AlertDialog(
             title=ft.Text("¿Eliminar contraseña?", color=ft.Colors.WHITE),

@@ -6,14 +6,16 @@ Este documento detalla la estructura interna, los componentes y las decisiones d
 
 ```text
 GestorDeContrasena/
+├── assets/              # Iconos y recursos visuales
 ├── components/          # Widgets reutilizables (PasswordCard, SearchBar, etc.)
 ├── database/            # Capa de persistencia (SQLite Manager, Modelos)
-├── security/            # Motor criptográfico y gestión de sesión (AES, Auth)
-├── utils/               # Utilidades de backup, importación y validaciones
+├── security/            # Motor criptográfico y gestión de sesión
+├── utils/               # Utilidades, backups y configuración de logs
 ├── views/               # Vistas principales de la aplicación (Flet)
 ├── main.py              # Punto de entrada y gestión de navegación
-├── vault.db             # Base de datos local (creada en el primer inicio)
-└── requirements.txt     # Dependencias del proyecto
+├── vault.db             # Base de datos local
+├── pyaes/               # Librería AES 100% Python puro (Vendored)
+└── requirements.txt     # Dependencias: flet, icecream
 ```
 
 ---
@@ -22,11 +24,14 @@ GestorDeContrasena/
 
 ### 1. Sistema de Bóveda Binaria
 KeyVault no almacena tu "Bóveda" en la nube. Todo el proceso ocurre en el dispositivo:
-- **KDF (Key Derivation Function)**: Utilizamos PBKDF2 (Password-Based Key Derivation Function 2) para transformar tu contraseña en una clave binaria fuerte.
-- **Salt**: Se genera un Salt aleatorio de 16 bytes que se almacena localmente para evitar ataques de tablas arcoíris.
+- **KDF (Key Derivation Function)**: Utilizamos **PBKDF2-HMAC-SHA256** (100.000 iteraciones) para transformar tu contraseña en una clave binaria fuerte de 256 bits.
+- **Salt**: Se genera un Salt aleatorio de **32 bytes (256 bits)** que se almacena localmente para evitar ataques de tablas arcoíris.
 
 ### 2. Motor Criptográfico (security/crypto.py)
-Utilizamos la librería `cryptography` (Python) para implementar **AES-GCM (Galois/Counter Mode)**. Este modo no solo cifra los datos, sino que garantiza su integridad (autenticación).
+Para garantizar una compatibilidad del **100% en compilaciones Android (APK)** sin sufrir errores silenciosos de dependencias C/Rust, utilizamos la librería vendoreada **`pyaes`** (Python puro) combinada con la librería estándar.
+Implementamos **AES-256 en modo CTR** combinado con un **HMAC-SHA256** mediante el paradigma **Encrypt-then-MAC (EtM)**. Este modelo garantiza una seguridad e integridad matemática equivalente a GCM, pero siendo indestructible entre arquitecturas cruzadas.
+
+**Formato de almacenamiento binario:** `[ IV (16 B) ] + [ HMAC (32 B) ] + [ Ciphertext ]`
 
 ### 3. Gestión de Identidad (security/auth.py)
 - **PIN vs Master Password**: El PIN de 6 dígitos permite un desbloqueo rápido. Internamente, el PIN cifra la contraseña maestra, que a su vez deriva la clave de la bóveda.
@@ -65,6 +70,21 @@ KeyVault utiliza un algoritmo de **Diferenciación de Registros**:
 - Se comparan (Título, Usuario, Categoría).
 - Si hay coincidencia, se realiza un *Upsert* (actualización de la clave si ha cambiado).
 - Si no hay coincidencia, se inserta como nuevo.
+
+---
+
+## 📝 Registro y Depuración (Logging)
+
+### 1. IceCream (`ic`)
+Utilizamos **IceCream** para reemplazar los `print` tradicionales durante el desarrollo.
+- **Ventaja**: Muestra el nombre de la variable, su valor y la línea exacta de ejecución.
+- **Producción**: Puede desactivarse globalmente con un solo comando (`ic.disable()`) sin necesidad de borrar las líneas del código.
+
+### 2. Gestión de Errores (Internal Error Log)
+Implementamos una capa de **Registro de Errores** persistente:
+- **Try/Except**: Todos los flujos críticos están envueltos en bloques de captura de errores.
+- **Persistencia**: Los errores capturados se guardan en un archivo `errors.log` para facilitar el soporte técnico.
+- **UI Feedback**: Los errores fatales se muestran en una vista de "Crash" para evitar el cierre silencioso de la aplicación.
 
 ---
 

@@ -5,6 +5,8 @@ audit_view.py - Vista de Auditoría y Salud de las contraseñas.
 import flet as ft
 from utils.security_audit import PasswordAuditEngine
 from utils.helpers import strength_color
+from icecream import ic
+from utils.logging_config import register_error
 
 class AuditView:
     def __init__(self, page: ft.Page, db_manager, auth_manager, on_edit: callable = None):
@@ -18,10 +20,25 @@ class AuditView:
         all_passwords = self.db.get_all_passwords()
         categories = self.db.get_all_categories()
         
-        # Realizar auditoría
-        audit_results = self.audit_engine.vault_wide_audit(
-            all_passwords, categories, self.auth.key
-        )
+        try:
+            # Realizar auditoría
+            audit_results = self.audit_engine.vault_wide_audit(
+                all_passwords, categories, self.auth.key
+            )
+            ic("Vault-wide audit completed")
+        except Exception as ex:
+            register_error("Error during vault audit", ex)
+            return ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED, size=48),
+                        ft.Text("Error al realizar la auditoría", size=16, color=ft.Colors.WHITE),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                ),
+                padding=40,
+                expand=True
+            )
         
         score = audit_results["overall_score"]
         

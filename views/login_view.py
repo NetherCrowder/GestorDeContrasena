@@ -3,6 +3,8 @@ login_view.py - Vista de login/registro con contraseña maestra y PIN.
 """
 
 import flet as ft
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class LoginView:
@@ -140,32 +142,42 @@ class LoginView:
             if not password:
                 self.show_error("Ingresa tu contraseña maestra")
                 return
-            if self.auth.login_master(password):
-                self.on_login_success()
-            else:
-                self.show_error("Contraseña incorrecta")
-                self.forgot_btn.visible = True
-                self.page.update()
+            try:
+                if self.auth.login_master(password):
+                    ic("Master Login successful")
+                    self.on_login_success()
+                else:
+                    self.show_error("Contraseña incorrecta")
+                    self.forgot_btn.visible = True
+                    self.page.update()
+            except Exception as ex:
+                register_error("Error during Master Login", ex)
+                self.show_error("Error inesperado al iniciar sesión")
         else:
             # Login con PIN
             pin = self.pin_field.value
             if not pin or len(pin) != 6:
                 self.show_error("El PIN debe tener 6 dígitos")
                 return
-            if self.auth.login_pin(pin):
-                self.on_login_success()
-            else:
-                self.pin_attempts += 1
-                remaining = self.max_pin_attempts - self.pin_attempts
-                if remaining <= 0:
-                    self.show_error("PIN bloqueado. Usa la contraseña maestra.")
-                    self.pin_field.visible = False
-                    self.master_field.visible = True
-                    self.show_master_btn.visible = False
-                    self.forgot_btn.visible = True
+            try:
+                if self.auth.login_pin(pin):
+                    ic("PIN Login successful")
+                    self.on_login_success()
                 else:
-                    self.show_error(f"PIN incorrecto. {remaining} intentos restantes.")
-                self.page.update()
+                    self.pin_attempts += 1
+                    remaining = self.max_pin_attempts - self.pin_attempts
+                    if remaining <= 0:
+                        self.show_error("PIN bloqueado. Usa la contraseña maestra.")
+                        self.pin_field.visible = False
+                        self.master_field.visible = True
+                        self.show_master_btn.visible = False
+                        self.forgot_btn.visible = True
+                    else:
+                        self.show_error(f"PIN incorrecto. {remaining} intentos restantes.")
+                    self.page.update()
+            except Exception as ex:
+                register_error("Error during PIN Login", ex)
+                self.show_error("Error inesperado al validar el PIN")
 
     def show_error(self, msg: str):
         self.error_text.value = msg

@@ -5,6 +5,8 @@ generator_view.py - Vista del generador de contraseñas con perfiles por sitio.
 import flet as ft
 from database.models import PASSWORD_PROFILES
 from utils.helpers import generate_password, password_strength, strength_color
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class GeneratorView:
@@ -389,7 +391,7 @@ class GeneratorView:
                     
                 self.page.run_task(restore_btn)
             except Exception as ex:
-                print(f"Error saving temp password: {ex}")
+                register_error("Error saving temp password", ex)
 
     def show_and_copy_password(self, e):
         if not self.generated_password:

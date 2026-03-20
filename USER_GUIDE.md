@@ -1,6 +1,6 @@
-# Guía de Usuario: KeyVault
+# Guía de Usuario: KeyVault Desktop
 
-Bienvenido a **KeyVault**, tu gestor de contraseñas seguro y personal. Esta guía te ayudará a configurar y aprovechar al máximo todas las funciones de tu nueva bóveda.
+Bienvenido a **KeyVault Desktop**, tu gestor de contraseñas seguro y personal para computadoras. Esta guía te ayudará a configurar y aprovechar al máximo todas las funciones de tu nueva bóveda.
 
 ---
 

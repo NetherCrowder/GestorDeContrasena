@@ -13,6 +13,8 @@ from utils.backup import (
 )
 import os
 import random
+from icecream import ic
+from utils.logging_config import register_error
 
 
 class DashboardView:
@@ -373,10 +375,14 @@ class DashboardView:
         self.page.run_task(launch)
 
     def toggle_favorite(self, pw_id):
-        pw = self.db.get_password_by_id(pw_id)
-        if pw:
-            self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
-            self.on_navigate("dashboard")
+        try:
+            pw = self.db.get_password_by_id(pw_id)
+            if pw:
+                self.db.update_password(pw_id, is_favorite=0 if pw["is_favorite"] else 1)
+                ic(f"Toggled favorite for {pw_id}")
+                self.on_navigate("dashboard")
+        except Exception as ex:
+            register_error(f"Error toggling favorite for {pw_id}", ex)
 
     def edit_password(self, pw_id):
         pw = self.db.get_password_by_id(pw_id)
@@ -399,15 +405,20 @@ class DashboardView:
             self.page.update()
 
         def do_delete(e):
-            self.db.delete_password(pw_id)
-            close_dialog()
-            
-            async def refresh():
-                import asyncio
-                await asyncio.sleep(0.3)
-                self.on_navigate("dashboard")
+            try:
+                self.db.delete_password(pw_id)
+                ic(f"Deleted password {pw_id}")
+                close_dialog()
                 
-            self.page.run_task(refresh)
+                async def refresh():
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    self.on_navigate("dashboard")
+                    
+                self.page.run_task(refresh)
+            except Exception as ex:
+                register_error(f"Error deleting password {pw_id}", ex)
+                self.show_snackbar("Error al eliminar la contraseña.")
 
         dialog = ft.AlertDialog(
             title=ft.Text("¿Eliminar contraseña?", color=ft.Colors.WHITE),
@@ -563,38 +574,44 @@ class DashboardView:
             custom_name = name_field.value.strip()
             close_dialog()
             
-            # Generar ruta y ejecutar
-            path = get_backup_path(custom_name)
-            passwords = self.db.get_all_passwords()
-            
-            # Usar el hash de la respuesta para cifrar de forma transparente
-            success, exported, skipped = export_passwords(
-                path, passwords, self.auth.key, 
-                q_obj["question"], answer_hash
-            )
-            
-            if success:
-                # Mostrar éxito con ruta completa en un diálogo persistente
-                def close_success(_):
-                    success_dialog.open = False
-                    self.page.update()
-
-                success_dialog = ft.AlertDialog(
-                    title=ft.Text("✅ Exportación Exitosa", color=ft.Colors.CYAN),
-                    content=ft.Column([
-                        ft.Text(f"Se han salvado {exported} contraseñas."),
-                        ft.Container(height=10),
-                        ft.Text("Ruta del archivo:", size=12, weight=ft.FontWeight.BOLD),
-                        ft.Text(path, size=11, color=ft.Colors.WHITE70, selectable=True),
-                    ], tight=True),
-                    actions=[ft.TextButton("Entendido", on_click=close_success)],
-                    bgcolor="#1e2a3a",
+            try:
+                # Generar ruta y ejecutar
+                path = get_backup_path(custom_name)
+                passwords = self.db.get_all_passwords()
+                
+                # Usar el hash de la respuesta para cifrar de forma transparente
+                success, exported, skipped = export_passwords(
+                    path, passwords, self.auth.key, 
+                    q_obj["question"], answer_hash
                 )
-                success_dialog.open = True
-                self.page.overlay.append(success_dialog)
-                self.page.update()
-            else:
-                self.show_snackbar("❌ Error al exportar.")
+                
+                if success:
+                    ic(f"Export successful: {exported} passwords to {path}")
+                    # Mostrar éxito con ruta completa en un diálogo persistente
+                    def close_success(_):
+                        success_dialog.open = False
+                        self.page.update()
+
+                    success_dialog = ft.AlertDialog(
+                        title=ft.Text("✅ Exportación Exitosa", color=ft.Colors.CYAN),
+                        content=ft.Column([
+                            ft.Text(f"Se han salvado {exported} contraseñas."),
+                            ft.Container(height=10),
+                            ft.Text("Ruta del archivo:", size=12, weight=ft.FontWeight.BOLD),
+                            ft.Text(path, size=11, color=ft.Colors.WHITE70, selectable=True),
+                        ], tight=True),
+                        actions=[ft.TextButton("Entendido", on_click=close_success)],
+                        bgcolor="#1e2a3a",
+                    )
+                    success_dialog.open = True
+                    self.page.overlay.append(success_dialog)
+                    self.page.update()
+                else:
+                    register_error("Export failed (returned False)")
+                    self.show_snackbar("❌ Error al exportar.")
+            except Exception as ex:
+                register_error("Exception during export", ex)
+                self.show_snackbar("❌ Error inesperado al exportar.")
 
         dialog = ft.AlertDialog(
             title=ft.Text("Generar Backup Seguro", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
@@ -740,7 +757,13 @@ class DashboardView:
             def close_result(_):
                 result_dialog.open = False
                 self.page.update()
-                self.on_navigate("dashboard")
+
+                async def _navigate():
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    self.on_navigate("dashboard")
+
+                self.page.run_task(_navigate)
 
             result_dialog = ft.AlertDialog(
                 title=ft.Text("✅ Importación Completada", color=ft.Colors.CYAN),

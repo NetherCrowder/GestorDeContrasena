@@ -1,2 +1,3 @@
 flet>=0.25.0
-pycryptodome>=3.20.0
+icecream
+pyinstaller
