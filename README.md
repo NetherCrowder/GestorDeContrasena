@@ -77,5 +77,6 @@ La interfaz de KeyVault ha sido diseñada bajo principios de **Diseño Premium**
 ---
 
 <div align="center">
-  <p>Desarrollado con ❤️ por el equipo de KeyVault (NetherCrowder)</p>
+  <p>Desarrollado por el equipo de KeyVault (NetherCrowder)</p>
+  <p><small>Icono de la aplicación obtenido de <a href="https://www.flaticon.es/icono-gratis/desarrollo-de-aplicaciones_7991055?term=aplicaciones&page=1&position=2&origin=tag&related_id=7991055">Flaticon</a> (Fecha de uso: 20 de marzo de 2026)</small></p>
 </div>
