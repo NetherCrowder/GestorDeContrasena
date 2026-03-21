@@ -266,36 +266,36 @@ class PasswordFormView:
             except (json.JSONDecodeError, TypeError):
                 rules = {}
 
-            try:
-                if self.is_edit:
-                    self.db.update_password(
-                        self.pw_data["id"],
-                        title=title.strip(),
-                        username=username_enc,
-                        password=password_enc,
-                        url=url,
-                        category_id=category_id,
-                        notes=notes_enc,
-                        password_rules=rules,
-                    )
-                    ic(f"Updated password {self.pw_data['id']}")
-                else:
-                    self.db.add_password(
-                        title=title.strip(),
-                        username=username_enc,
-                        password=password_enc,
-                        url=url,
-                        category_id=category_id,
-                        notes=notes_enc,
-                        password_rules=rules,
-                    )
-                    ic("Added new password")
+        try:
+            if self.is_edit:
+                self.db.update_password(
+                    self.pw_data["id"],
+                    title=title.strip(),
+                    username=username_enc,
+                    password=password_enc,
+                    url=url,
+                    category_id=category_id,
+                    notes=notes_enc,
+                    password_rules=rules,
+                )
+                ic(f"Updated password {self.pw_data['id']}")
+            else:
+                self.db.add_password(
+                    title=title.strip(),
+                    username=username_enc,
+                    password=password_enc,
+                    url=url,
+                    category_id=category_id,
+                    notes=notes_enc,
+                    password_rules=rules,
+                )
+                ic("Added new password")
 
-                if self.on_save:
-                    self.on_save()
-            except Exception as ex:
-                register_error("Error saving password", ex)
-                self.show_error("Error inesperado al guardar la contraseña")
+            if self.on_save:
+                self.on_save()
+        except Exception as ex:
+            register_error("Error saving password", ex)
+            self.show_error("Error inesperado al guardar la contraseña")
 
     def show_error(self, msg):
         self.error_text.value = msg
