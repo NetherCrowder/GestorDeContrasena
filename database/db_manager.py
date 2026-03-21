@@ -25,10 +25,12 @@ class DatabaseManager:
                 db_path = os.path.join(app_storage, "vault.db")
                 ic(f"DATABASE INIT: Android/Flet Storage Detected -> {db_path}")
             else:
-                # Ruta por defecto en el directorio de la app (para Windows)
-                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                db_path = os.path.join(base, "vault.db")
-                ic(f"DATABASE INIT: Windows/Local Storage Detected -> {db_path}")
+                # Ruta persistente en Windows (AppData/Local/KeyVault)
+                from pathlib import Path
+                base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+                base_dir.mkdir(parents=True, exist_ok=True)
+                db_path = str(base_dir / "vault.db")
+                ic(f"DATABASE INIT: Windows/Local Persistent Storage -> {db_path}")
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
 
