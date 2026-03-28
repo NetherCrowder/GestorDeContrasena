@@ -9,9 +9,10 @@ import os
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from Crypto.Random import get_random_bytes
-from Crypto.Cipher import AES
-from Crypto.Protocol.KDF import PBKDF2
+import pyaes
+import hmac
+import hashlib
+import os
 from security.crypto import decrypt as decrypt_master
 
 def get_base_data_path() -> Path:
@@ -25,9 +26,9 @@ APP_FIXED_KEY = hashlib.sha256(b"KeyVault_Internal_Binary_Lock_V1").digest()
 
 # Parámetros técnicos
 SALT_SIZE = 32
-NONCE_SIZE = 12
-TAG_SIZE = 16
-KEY_SIZE = 32
+IV_SIZE   = 16   # Cambiado a 16 bytes para compatibilidad estándar con AES-CTR
+MAC_SIZE  = 32   # Tamaño del HMAC-SHA256
+KEY_SIZE  = 32
 ITERATIONS = 50_000
 
 # ------------------------------------------------------------------ #
@@ -57,23 +58,49 @@ def list_backups() -> list[str]:
 #  Criptografía Interna
 # ------------------------------------------------------------------ #
 def derive_key(secret: str, salt: bytes) -> bytes:
-    """Deriva una clave de 256 bits usando PBKDF2."""
+    """Deriva una clave de 256 bits usando PBKDF2-HMAC-SHA256."""
     normalized = " ".join(secret.strip().lower().split())
-    return PBKDF2(normalized.encode("utf-8"), salt, dkLen=KEY_SIZE, count=ITERATIONS)
+    return hashlib.pbkdf2_hmac(
+        "sha256", 
+        normalized.encode("utf-8"), 
+        salt, 
+        iterations=ITERATIONS, 
+        dklen=KEY_SIZE
+    )
 
 def encrypt_bytes(data: bytes, key: bytes) -> tuple[bytes, bytes, bytes]:
-    salt = get_random_bytes(SALT_SIZE)
-    nonce = get_random_bytes(NONCE_SIZE)
-    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    ciphertext, tag = cipher.encrypt_and_digest(data)
-    return salt, nonce, tag + ciphertext
+    """Cifra bytes usando AES-256-CTR + HMAC-SHA256."""
+    salt = os.urandom(SALT_SIZE)
+    iv = os.urandom(IV_SIZE)
+    
+    # Cifrado CTR
+    counter = pyaes.Counter(initial_value=int.from_bytes(iv, "big"))
+    aes = pyaes.AESModeOfOperationCTR(key, counter=counter)
+    ciphertext = aes.encrypt(data)
+    
+    # Autenticación (Encrypt-then-MAC)
+    mac = hmac.new(key, iv + ciphertext, hashlib.sha256).digest()
+    
+    return salt, iv, mac + ciphertext
 
-def decrypt_bytes(salt: bytes, nonce: bytes, encrypted_payload: bytes, key: bytes) -> bytes | None:
+def decrypt_bytes(salt: bytes, iv: bytes, encrypted_payload: bytes, key: bytes) -> bytes | None:
+    """Verifica el MAC y descifra la carga útil."""
     try:
-        tag = encrypted_payload[:TAG_SIZE]
-        ciphertext = encrypted_payload[TAG_SIZE:]
-        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-        return cipher.decrypt_and_verify(ciphertext, tag)
+        if len(encrypted_payload) < MAC_SIZE:
+            return None
+            
+        mac = encrypted_payload[:MAC_SIZE]
+        ciphertext = encrypted_payload[MAC_SIZE:]
+        
+        # Verificar integridad
+        expected_mac = hmac.new(key, iv + ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(mac, expected_mac):
+            return None
+            
+        # Descifrado CTR
+        counter = pyaes.Counter(initial_value=int.from_bytes(iv, "big"))
+        aes = pyaes.AESModeOfOperationCTR(key, counter=counter)
+        return aes.decrypt(ciphertext)
     except Exception:
         return None
 
@@ -114,13 +141,18 @@ def export_passwords(file_path: str, passwords: list[dict], auth_key: bytes, que
             return False, 0, skipped_count
 
         # Capa 1: Cifrado con Respuesta de Seguridad
-        i_salt = get_random_bytes(SALT_SIZE)
+        i_salt = os.urandom(SALT_SIZE)
         i_key = derive_key(answer, i_salt)
-        i_nonce = get_random_bytes(NONCE_SIZE)
-        i_cipher = AES.new(i_key, AES.MODE_GCM, nonce=i_nonce)
+        i_iv = os.urandom(IV_SIZE)
         
+        # Codificar datos
         raw_inner = json.dumps(decrypted_passwords, ensure_ascii=False).encode("utf-8")
-        i_ciphertext, i_tag = i_cipher.encrypt_and_digest(raw_inner)
+        
+        # Cifrado de la capa interna con CTR y HMAC
+        i_counter = pyaes.Counter(initial_value=int.from_bytes(i_iv, "big"))
+        i_aes = pyaes.AESModeOfOperationCTR(i_key, counter=i_counter)
+        i_ciphertext = i_aes.encrypt(raw_inner)
+        i_mac = hmac.new(i_key, i_iv + i_ciphertext, hashlib.sha256).digest()
         
         # Ofuscar pregunta
         obfuscated_q = base64.b64encode(question.encode()).decode()
@@ -129,18 +161,18 @@ def export_passwords(file_path: str, passwords: list[dict], auth_key: bytes, que
         inner_package = {
             "h_meta": obfuscated_q,
             "s": base64.b64encode(i_salt).decode(),
-            "n": base64.b64encode(i_nonce).decode(),
-            "t": base64.b64encode(i_tag).decode(),
+            "n": base64.b64encode(i_iv).decode(),
+            "t": base64.b64encode(i_mac).decode(),
             "d": base64.b64encode(i_ciphertext).decode()
         }
         
         # Capa 2: Bloqueo Binario de la Aplicación
         o_raw = json.dumps(inner_package).encode("utf-8")
-        o_salt, o_nonce, o_payload = encrypt_bytes(o_raw, APP_FIXED_KEY)
+        o_salt, o_iv, o_payload = encrypt_bytes(o_raw, APP_FIXED_KEY)
         
         with open(file_path, "wb") as f:
             f.write(o_salt)
-            f.write(o_nonce)
+            f.write(o_iv)
             f.write(o_payload)
             
         return True, len(decrypted_passwords), skipped_count
@@ -153,10 +185,10 @@ def get_backup_metadata(file_path: str) -> dict | None:
     try:
         with open(file_path, "rb") as f:
             o_salt = f.read(SALT_SIZE)
-            o_nonce = f.read(NONCE_SIZE)
+            o_iv = f.read(IV_SIZE)
             o_payload = f.read()
             
-        o_raw = decrypt_bytes(o_salt, o_nonce, o_payload, APP_FIXED_KEY)
+        o_raw = decrypt_bytes(o_salt, o_iv, o_payload, APP_FIXED_KEY)
         if not o_raw: 
             return None
         
@@ -171,13 +203,21 @@ def import_passwords(inner_package: dict, answer: str) -> list[dict] | None:
     """Descifra el contenido del paquete usando la respuesta de seguridad."""
     try:
         i_salt = base64.b64decode(inner_package["s"])
-        i_nonce = base64.b64decode(inner_package["n"])
-        i_tag = base64.b64decode(inner_package["t"])
-        i_data = base64.b64decode(inner_package["d"])
+        i_iv = base64.b64decode(inner_package["n"])
+        i_mac = base64.b64decode(inner_package["t"])
+        i_ciphertext = base64.b64decode(inner_package["d"])
         
         i_key = derive_key(answer, i_salt)
-        i_cipher = AES.new(i_key, AES.MODE_GCM, nonce=i_nonce)
-        decrypted = i_cipher.decrypt_and_verify(i_data, i_tag)
+        
+        # Verificar integridad de la capa interna
+        expected_mac = hmac.new(i_key, i_iv + i_ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(i_mac, expected_mac):
+            return None
+            
+        # Descifrar contenido
+        i_counter = pyaes.Counter(initial_value=int.from_bytes(i_iv, "big"))
+        i_aes = pyaes.AESModeOfOperationCTR(i_key, counter=i_counter)
+        decrypted = i_aes.decrypt(i_ciphertext)
         return json.loads(decrypted.decode("utf-8"))
     except Exception:
         return None

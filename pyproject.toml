@@ -1,0 +1,29 @@
+[project]
+name = "Key Vault - Gestor de Contraseñas"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Luis Aarón Chaverra Palacios", email = "luisaaronUSBMed@gmail.com" }
+]
+dependencies = [
+    "flet>=0.83.0",
+    "icecream"
+]
+
+[dependency-groups]
+dev = [
+    "flet-cli>=0.83.0",
+    "flet-desktop>=0.83.0",
+    "flet-web>=0.83.0",
+]
+
+[tool.flet]
+org = "com.nethercrowder"
+product = "Key Vault"
+company = "Nether Crowder"
+copyright = "Copyright (C) 2023-2026 by Nether Crowder"
+
+[tool.flet.app]
+path = "."
