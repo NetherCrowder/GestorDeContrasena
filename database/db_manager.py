@@ -18,19 +18,19 @@ class DatabaseManager:
     def __init__(self, db_path: str | None = None):
         ic("DATABASE INIT: Starting DatabaseManager initialization...")
         if db_path is None:
-            # En Android (o empaquetado Flet), el directorio de la app es de SOLO LECTURA.
-            # Debemos usar la variable garantizada de escritura de Flet:
+            from pathlib import Path
+            # En Android, flet provee esta variable para almacenamiento persistente de la app.
             app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+            
             if app_storage:
-                db_path = os.path.join(app_storage, "vault.db")
-                ic(f"DATABASE INIT: Android/Flet Storage Detected -> {db_path}")
+                base_dir = Path(app_storage)
             else:
                 # Ruta persistente en Windows (AppData/Local/KeyVault)
-                from pathlib import Path
                 base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
-                base_dir.mkdir(parents=True, exist_ok=True)
-                db_path = str(base_dir / "vault.db")
-                ic(f"DATABASE INIT: Windows/Local Persistent Storage -> {db_path}")
+                
+            base_dir.mkdir(parents=True, exist_ok=True)
+            db_path = str(base_dir / "vault.db")
+            ic(f"DATABASE INIT: Storage Path -> {db_path}")
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
 

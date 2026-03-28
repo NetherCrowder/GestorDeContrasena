@@ -9,10 +9,17 @@ ic.configureOutput(prefix='DEBUG | ')
 
 def setup_logging():
     """Configura el sistema de registro de errores persistente."""
-    # Usar AppData/Local/KeyVault para los logs
-    import os
     from pathlib import Path
-    base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+    
+    # En Android, flet provee esta variable para almacenamiento persistente de la app.
+    app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+    
+    if app_storage:
+        base_dir = Path(app_storage)
+    else:
+        # Ruta persistente en Windows (AppData/Local/KeyVault)
+        base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+        
     base_dir.mkdir(parents=True, exist_ok=True)
     log_file = base_dir / "errors.log"
     
