@@ -47,6 +47,9 @@ def main(page: ft.Page):
         db.connect()
         auth = AuthManager(db)
 
+        from utils.sync_service import BridgeServer
+        bridge_server = BridgeServer()
+
         # ------------------------------------------------------------------ #
         #  Navegación
         # ------------------------------------------------------------------ #
@@ -61,18 +64,26 @@ def main(page: ft.Page):
 
             elif view_name == "dashboard":
                 dashboard = DashboardView(
-                    page, db, auth,
+                    page, db, auth, bridge_server,
                     on_navigate=lambda v, **kw: navigate(v, **kw),
                     on_logout=lambda: logout(),
                 )
                 page.add(dashboard.build())
+
+            elif view_name == "sync_host":
+                from views.sync_host_view import SyncHostView
+                sync_view = SyncHostView(
+                    page, db, auth, bridge_server,
+                    on_back=lambda: navigate("dashboard")
+                )
+                page.add(sync_view.build())
 
             elif view_name == "passwords":
                 category_id = kwargs.get("category_id", 8)
                 categories = db.get_all_categories()
                 category = next((c for c in categories if c["id"] == category_id), categories[-1])
                 pw_view = PasswordsView(
-                    page, db, auth,
+                    page, db, auth, bridge_server,
                     category=category,
                     on_back=lambda: navigate("dashboard"),
                     on_refresh=lambda: navigate("passwords", category_id=category_id),

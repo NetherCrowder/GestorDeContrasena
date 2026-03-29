@@ -15,6 +15,7 @@ def create_password_card(
     on_delete: callable,
     on_favorite: callable,
     on_open_url: callable,
+    on_push_mobile: callable = None,
 ) -> ft.Container:
     """Crea una tarjeta visual para una contraseña."""
 
@@ -88,6 +89,13 @@ def create_password_card(
                             icon_size=18,
                             tooltip="Abrir URL",
                             on_click=lambda e, pid=pw_data["id"]: on_open_url(pid),
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.CLOUD_SYNC,
+                            icon_color=ft.Colors.CYAN_200,
+                            icon_size=18,
+                            tooltip="Enviar al Móvil",
+                            on_click=lambda e, pid=pw_data["id"]: on_push_mobile(pid) if on_push_mobile else None,
                         ),
                         ft.IconButton(
                             icon=ft.Icons.EDIT,

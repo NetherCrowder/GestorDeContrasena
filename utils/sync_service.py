@@ -171,13 +171,14 @@ class BridgeServer:
         ip = self.get_local_ip()
         pin = self.generate_pin(ip, self.session_token)
         
-        return {
+        self.last_config = {
             "ip": ip,
             "port": self.port,
             "token": self.session_token,
             "key_b64": base64.b64encode(self.session_key).decode(),
             "pin": pin
         }
+        return self.last_config
 
     def stop(self):
         """Detiene el servidor."""
