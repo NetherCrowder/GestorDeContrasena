@@ -116,16 +116,32 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(encrypted_vault.encode())
             
+        # Endpoint: /handshake (Validación inicial)
+        elif parsed.path == "/handshake":
+            # Registrar cliente
+            client_ip = self.client_address[0]
+            server.connected_clients[client_ip] = time.time()
+            
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "server_name": "KeyVault-PC",
+                "version": "1.0.0"
+            }).encode())
+
         # Endpoint: /clipboard/poll (Long polling para portapapeles)
         elif parsed.path == "/clipboard/poll":
             client_ip = self.client_address[0]
+            server.connected_clients[client_ip] = time.time()
             # Si no hay cola para este cliente, crearla
             if client_ip not in server.client_queues:
                 server.client_queues[client_ip] = queue.Queue()
             
             try:
-                # Esperar hasta 30 segundos por un mensaje
-                msg = server.client_queues[client_ip].get(timeout=30)
+                # Esperar hasta 20 segundos para que sea más responsivo el refresco
+                msg = server.client_queues[client_ip].get(timeout=20)
                 encrypted_msg = server.encryptor.encrypt(msg)
                 
                 self.send_response(200)
@@ -152,7 +168,9 @@ class BridgeServer:
         self.encryptor = None
         self.vault_data = None # Almacena el binario .vk (en base64 o raw)
         self.client_queues = {} # Colas por IP para clipboard push
+        self.connected_clients = {} # IP -> Last Seen Timestamp
         self.is_running = False
+        self.last_config = None
 
     def start(self, vault_data: str):
         """Inicia el servidor en un hilo separado."""
@@ -223,23 +241,32 @@ class BridgeClient:
         self.is_listening = False
 
     def connect(self, ip, port, token, encryption_key, on_vault: callable, on_clipboard: callable) -> bool:
-        """Configura el cliente, descarga la bóveda inicial y comienza el listener."""
+        """Configura el cliente y verifica la conexión real (Handshake)."""
         try:
             self.base_url = f"http://{ip}:{port}"
             self.token = token
             self.key = encryption_key
             self.encryptor = SessionEncryptor(self.key)
             
-            # 1. Intentar descargar Bóveda
+            # 1. VERIFICACIÓN REAL (Handshake)
+            handshake_url = f"{self.base_url}/handshake?token={self.token}"
+            with urllib.request.urlopen(handshake_url, timeout=5) as resp:
+                if resp.status != 200:
+                    return False
+                ic("Handshake exitoso con PC")
+
+            # 2. Descargar Bóveda inicial
             vault = self.download_vault()
             if vault:
                 on_vault(vault)
+            else:
+                ic("Advertencia: No se pudo descargar la bóveda inicial, pero hay conexión.")
                 
-            # 2. Iniciar escucha de portapapeles
+            # 3. Iniciar escucha de portapapeles
             self.start_clipboard_listener(on_clipboard)
             return True
         except Exception as e:
-            ic(f"Error connecting: {e}")
+            ic(f"Fallo de conexión real: {e}")
             return False
 
     def download_vault(self) -> str | None:

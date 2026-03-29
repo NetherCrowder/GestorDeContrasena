@@ -43,6 +43,7 @@ class SyncHostView:
             color=ft.Colors.WHITE,
             on_click=self.toggle_bridge
         )
+        self.refresh_loop_running = False
 
     def build(self):
         # Si el servidor ya está activo, restaurar UI
@@ -54,7 +55,7 @@ class SyncHostView:
                 [
                     ft.Row(
                         [
-                            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda _: self.stop_and_back()),
+                            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda _: self.on_back()),
                             ft.Text("Puente KeyVault", size=20, weight=ft.FontWeight.BOLD),
                         ],
                         alignment=ft.MainAxisAlignment.START,
@@ -170,6 +171,10 @@ class SyncHostView:
             self.is_active = True
             ic("Servidor de sincronización iniciado")
             
+            # Iniciar refresco de clientes si no está corriendo
+            if not self.refresh_loop_running:
+                self.page.run_task(self.refresh_clients_loop)
+            
         except Exception as ex:
             ic(f"Fallo al iniciar servidor: {ex}")
             self.page.snack_bar = ft.SnackBar(ft.Text(f"Error: {ex}"))
@@ -189,12 +194,66 @@ class SyncHostView:
         self.is_active = False
         self.page.update()
 
+    async def refresh_clients_loop(self):
+        """Ciclo de actualización de la lista de clientes."""
+        import time
+        import asyncio
+        self.refresh_loop_running = True
+        while self.is_active:
+            try:
+                now = time.time()
+                active_clients = []
+                # Limpiar clientes que no han hecho poll en 45 segundos
+                to_remove = []
+                # Acceder a bridge_server.connected_clients
+                clients = self.server.connected_clients
+                for ip, last_seen in list(clients.items()):
+                    if now - last_seen < 45:
+                        active_clients.append(ip)
+                    else:
+                        to_remove.append(ip)
+                
+                for ip in to_remove:
+                    if ip in clients: del clients[ip]
+                
+                # Actualizar UI
+                self.clients_list.controls = [
+                    ft.Row([
+                        ft.Icon(ft.Icons.PHONELINK_LOCK, size=16, color=ft.Colors.GREEN),
+                        ft.Text(f"Móvil ({ip})", size=13, color=ft.Colors.WHITE70)
+                    ]) for ip in active_clients
+                ]
+                
+                if not active_clients:
+                    self.clients_list.controls = [ft.Text("Esperando conexiones...", size=12, italic=True, color=ft.Colors.WHITE38)]
+                
+                self.page.update()
+            except Exception as e:
+                ic(f"Error en refresh loop: {e}")
+            
+            await asyncio.sleep(5)
+        self.refresh_loop_running = False
+
+    def show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg))
+        self.page.snack_bar.open = True
+        self.page.update()
+
+    def stop_and_back(self):
+        self.stop_bridge()
+        self.on_back()
+
     def restore_active_ui(self):
         """Si el servidor ya está corriendo, restaura la UI con el último config."""
         try:
             config = self.server.last_config
+            if not config: return
+            
             # Re-generar QR
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
+            questions = self.auth.get_user_questions()
+            q_obj = random.choice(questions) if questions else {"question": "Desconocida"}
+            
+            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj.get('question','')}"
             self.qr_image.src = self.generate_qr_base64(qr_payload)
             self.qr_image.visible = True
             
@@ -205,9 +264,9 @@ class SyncHostView:
             self.status_text.color = ft.Colors.CYAN
             self.start_btn.text = "Detener Puente"
             self.start_btn.bgcolor = ft.Colors.RED_700
+            
+            # Re-iniciar refresh loop si no está corriendo
+            if not self.refresh_loop_running:
+                self.page.run_task(self.refresh_clients_loop)
         except Exception as e:
             ic(f"Error restaurando UI: {e}")
-
-    def stop_and_back(self):
-        self.stop_bridge()
-        self.on_back()
