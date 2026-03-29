@@ -24,8 +24,15 @@ class SyncHostView:
         
         # Componentes UI
         self.status_text = ft.Text("Puente Desconectado", size=16, color=ft.Colors.WHITE54)
-        self.qr_image = ft.Image(src_base64="", width=250, height=250, border_radius=12, visible=False)
-        self.pin_text = ft.Text("", size=40, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN, letter_spacing=5)
+        self.qr_image = ft.Image(
+            src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+            width=250, height=250, border_radius=12, visible=False
+        )
+        self.pin_text = ft.Text("", size=40, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN)
+        self.pin_area = ft.Column([
+            ft.Text("PIN de Respaldo", size=12, color=ft.Colors.WHITE38),
+            self.pin_text,
+        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
         self.ip_text = ft.Text("", size=14, color=ft.Colors.WHITE38)
         self.clients_list = ft.Column(spacing=5)
         
@@ -76,10 +83,7 @@ class SyncHostView:
                             [
                                 self.status_text,
                                 self.qr_image,
-                                ft.Column([
-                                    ft.Text("PIN de Respaldo", size=12, color=ft.Colors.WHITE38),
-                                    self.pin_text,
-                                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, visible=False, key="pin_area"),
+                                self.pin_area,
                                 self.ip_text,
                             ],
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -115,7 +119,8 @@ class SyncHostView:
         
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode()
+        raw_b64 = base64.b64encode(buffered.getvalue()).decode()
+        return f"data:image/png;base64,{raw_b64}"
 
     def toggle_bridge(self, e):
         if not self.is_active:
@@ -148,15 +153,14 @@ class SyncHostView:
             vault_b64 = base64.b64encode(vault_bytes).decode()
             config = self.server.start(vault_b64)
             
-            # 3. Generar QR
-            # Formato: KV_SYNC|IP|PORT|TOKEN|KEY_B64|QUESTION_TEXT
+            # 3. Generar QR (Data URI completo)
             qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj['question']}"
-            self.qr_image.src_base64 = self.generate_qr_base64(qr_payload)
+            self.qr_image.src = self.generate_qr_base64(qr_payload)
             self.qr_image.visible = True
             
             # 4. Actualizar UI
             self.pin_text.value = config["pin"]
-            self.pin_text.parent.visible = True
+            self.pin_area.visible = True
             self.ip_text.value = f"Servidor activo en: {config['ip']}"
             self.status_text.value = "🟢 Esperando conexión..."
             self.status_text.color = ft.Colors.CYAN
@@ -176,7 +180,7 @@ class SyncHostView:
     def stop_bridge(self):
         self.server.stop()
         self.qr_image.visible = False
-        self.pin_text.parent.visible = False
+        self.pin_area.visible = False
         self.ip_text.value = ""
         self.status_text.value = "Puente Desconectado"
         self.status_text.color = ft.Colors.WHITE54
@@ -191,11 +195,11 @@ class SyncHostView:
             config = self.server.last_config
             # Re-generar QR
             qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
-            self.qr_image.src_base_64 = self.generate_qr_base64(qr_payload)
+            self.qr_image.src = self.generate_qr_base64(qr_payload)
             self.qr_image.visible = True
             
             self.pin_text.value = config["pin"]
-            self.pin_text.parent.visible = True
+            self.pin_area.visible = True
             self.ip_text.value = f"Servidor activo en: {config['ip']}"
             self.status_text.value = "🟢 Puente Activo"
             self.status_text.color = ft.Colors.CYAN

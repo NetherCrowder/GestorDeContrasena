@@ -215,12 +215,32 @@ class BridgeServer:
 class BridgeClient:
     """Implementación del Cliente para descargar y escuchar eventos."""
     
-    def __init__(self, ip, port, token, key_b64):
-        self.base_url = f"http://{ip}:{port}"
-        self.token = token
-        self.key = base64.b64decode(key_b64)
-        self.encryptor = SessionEncryptor(self.key)
+    def __init__(self):
+        self.base_url = None
+        self.token = None
+        self.key = None
+        self.encryptor = None
         self.is_listening = False
+
+    def connect(self, ip, port, token, encryption_key, on_vault: callable, on_clipboard: callable) -> bool:
+        """Configura el cliente, descarga la bóveda inicial y comienza el listener."""
+        try:
+            self.base_url = f"http://{ip}:{port}"
+            self.token = token
+            self.key = encryption_key
+            self.encryptor = SessionEncryptor(self.key)
+            
+            # 1. Intentar descargar Bóveda
+            vault = self.download_vault()
+            if vault:
+                on_vault(vault)
+                
+            # 2. Iniciar escucha de portapapeles
+            self.start_clipboard_listener(on_clipboard)
+            return True
+        except Exception as e:
+            ic(f"Error connecting: {e}")
+            return False
 
     def download_vault(self) -> str | None:
         """Descarga la bóveda cifrada del PC."""
@@ -231,7 +251,7 @@ class BridgeClient:
                     encrypted_data = response.read().decode("utf-8")
                     return self.encryptor.decrypt(encrypted_data)
         except Exception as e:
-            print(f"Error al descargar vault: {e}")
+            ic(f"Error al descargar vault: {e}")
         return None
 
     def start_clipboard_listener(self, on_receive: callable):
@@ -251,7 +271,9 @@ class BridgeClient:
                         elif response.status == 204:
                             pass # Reintento normal
                 except Exception:
-                    time.sleep(2) # Pausa ante error de red
+                    # Pausa exponencial o simple ante error de red
+                    if not self.is_listening: break
+                    time.sleep(2)
                     
         threading.Thread(target=loop, daemon=True).start()
 

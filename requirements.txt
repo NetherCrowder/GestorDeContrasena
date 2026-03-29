@@ -2,3 +2,4 @@ flet
 icecream
 pyinstaller
 qrcode
+Pillow
