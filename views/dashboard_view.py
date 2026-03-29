@@ -20,11 +20,12 @@ from utils.logging_config import register_error
 class DashboardView:
     """Pantalla principal del gestor de contraseñas."""
 
-    def __init__(self, page: ft.Page, db_manager, auth_manager,
+    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge_client,
                  on_navigate: callable, on_logout: callable):
         self.page = page
         self.db = db_manager
         self.auth = auth_manager
+        self.bridge_client = bridge_client
         self.on_navigate = on_navigate
         self.on_logout = on_logout
         self.current_tab = 0
@@ -163,6 +164,11 @@ class DashboardView:
                     ft.Icons.RESTORE, "Restaurar KeyVault",
                     "Importar desde archivo seguro (.vk)",
                     self.start_import,
+                ),
+                self.settings_card(
+                    ft.Icons.PHONELINK_LOCK, "Vincular PC",
+                    "Conectar con dispositivo de escritorio",
+                    self.open_sync_client,
                 ),
                 ft.Container(height=20),
                 ft.ElevatedButton(
@@ -798,5 +804,11 @@ class DashboardView:
 
     def show_snackbar(self, msg: str):
         self.page.snack_bar = ft.SnackBar(ft.Text(msg, color=ft.Colors.WHITE), bgcolor="#333333")
+        self.page.update()
+        self.page.snack_bar.open = True
+        self.page.update()
+
+    def open_sync_client(self, e=None):
+        self.on_navigate("sync_client")
         self.page.snack_bar.open = True
         self.page.update()
