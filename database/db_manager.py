@@ -26,10 +26,14 @@ class DatabaseManager:
                 ic(f"DATABASE INIT: Android/Flet Storage Detected -> {db_path}")
             else:
                 # Ruta persistente en Windows (AppData/Local/KeyVault)
+                import sys
                 from pathlib import Path
                 base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
                 base_dir.mkdir(parents=True, exist_ok=True)
-                db_path = str(base_dir / "vault.db")
+                
+                # Aislamos la base de datos si estamos haciendo pruebas como celular local
+                db_name = "vault_mobile_test.db" if "--mobile" in sys.argv else "vault.db"
+                db_path = str(base_dir / db_name)
                 ic(f"DATABASE INIT: Windows/Local Persistent Storage -> {db_path}")
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
@@ -47,7 +51,7 @@ class DatabaseManager:
                 ic(f"DATABASE CONNECT: Directory {db_dir} does not exist. Creating it...")
                 os.makedirs(db_dir, exist_ok=True)
                 
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             ic("DATABASE CONNECT: Connection successful. Setting pragmas...")
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA foreign_keys = ON")
@@ -129,7 +133,9 @@ class DatabaseManager:
 
     def update_password(self, pw_id: int, **fields) -> None:
         """Actualiza los campos indicados de una contraseña."""
-        fields["updated_at"] = datetime.now().isoformat()
+        # Solo asignar updated_at automático si no viene en los fields
+        if "updated_at" not in fields:
+            fields["updated_at"] = datetime.now().isoformat()
         if "password_rules" in fields and isinstance(fields["password_rules"], dict):
             fields["password_rules"] = json.dumps(fields["password_rules"])
         set_clause = ", ".join(f"{k} = ?" for k in fields)
@@ -138,6 +144,41 @@ class DatabaseManager:
             f"UPDATE passwords SET {set_clause} WHERE id = ?", values
         )
         self.conn.commit()
+
+    def upsert_from_bridge(self, title: str, username: bytes, password: bytes,
+                           url: str, category_id: int, notes: bytes,
+                           is_favorite: int, remote_updated_at: str,
+                           existing_id: int | None = None) -> str:
+        """Inserta o actualiza una contraseña desde sincronización del Bridge.
+        Preserva el updated_at original del PC para que las próximas sincronizaciones
+        puedan comparar correctamente los timestamps.
+        Devuelve: 'inserted' | 'updated' | 'skipped'
+        """
+        now = datetime.now().isoformat()
+        remote_ts = remote_updated_at or now
+
+        if existing_id is None:
+            # Nuevo registro
+            self.conn.execute(
+                """INSERT INTO passwords
+                   (title, username, password, url, category_id, notes,
+                    is_favorite, password_rules, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, username, password, url, category_id, notes,
+                 is_favorite, json.dumps({}), now, remote_ts),
+            )
+            self.conn.commit()
+            return "inserted"
+        else:
+            # Actualizar — preservar el timestamp remoto para futuras comparaciones
+            self.conn.execute(
+                """UPDATE passwords
+                   SET username=?, password=?, url=?, notes=?, is_favorite=?, updated_at=?
+                   WHERE id=?""",
+                (username, password, url, notes, is_favorite, remote_ts, existing_id),
+            )
+            self.conn.commit()
+            return "updated"
 
     def delete_password(self, pw_id: int) -> None:
         self.conn.execute("DELETE FROM passwords WHERE id = ?", (pw_id,))

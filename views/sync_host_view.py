@@ -7,9 +7,8 @@ import flet as ft
 import qrcode
 import io
 import base64
-import random
 from utils.sync_service import BridgeServer
-from utils.backup import export_passwords_to_bytes
+from utils.backup import export_passwords_bridge
 from icecream import ic
 
 class SyncHostView:
@@ -24,11 +23,10 @@ class SyncHostView:
         
         # Componentes UI
         self.status_text = ft.Text("Puente Desconectado", size=16, color=ft.Colors.WHITE54)
-        self.qr_image = ft.Image(
-            src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-            width=250, height=250, border_radius=12, visible=False
-        )
-        self.pin_text = ft.Text("", size=40, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN)
+        self.qr_image = ft.Image(src="", width=200, height=200, visible=False)
+        self.copy_btn = ft.TextButton("Copiar Enlace Manual", icon=ft.Icons.COPY, on_click=self.copy_sync_code, visible=False)
+        
+        self.pin_text = ft.Text("---", size=32, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN)
         self.pin_area = ft.Column([
             ft.Text("PIN de Respaldo", size=12, color=ft.Colors.WHITE38),
             self.pin_text,
@@ -84,6 +82,7 @@ class SyncHostView:
                             [
                                 self.status_text,
                                 self.qr_image,
+                                self.copy_btn,
                                 self.pin_area,
                                 self.ip_text,
                             ],
@@ -129,35 +128,29 @@ class SyncHostView:
         else:
             self.stop_bridge()
 
+    def copy_sync_code(self, e):
+        """Copia el token E2EE completo al portapapeles del PC de forma nativa en Windows."""
+        import subprocess
+        subprocess.run("clip", input=self.qr_payload.strip().encode("utf-16le"), check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.page.snack_bar = ft.SnackBar(ft.Text("Enlace de vinculación copiado"), bgcolor=ft.Colors.GREEN_700)
+        self.page.snack_bar.open = True
+        self.page.update()
+
     def start_bridge(self):
         try:
-            # 1. Preparar datos de la bóveda (usando una pregunta al azar de las existentes)
-            questions = self.auth.get_user_questions()
-            if not questions:
-                self.page.snack_bar = ft.SnackBar(ft.Text("Configura preguntas de seguridad primero"))
-                self.page.snack_bar.open = True
-                self.page.update()
-                return
-            
-            q_obj = random.choice(questions)
-            passwords = self.db.get_all_passwords()
-            
-            # Exportar directamente a bytes (binario .vk)
-            vault_bytes = export_passwords_to_bytes(
-                passwords, self.auth.key, q_obj["question"], q_obj["answer_hash"]
-            )
-            
-            if not vault_bytes:
-                raise Exception("Error al preparar paquete binario")
+            # Proveedor dinámico: re-exporta las contraseñas frescas en cada petición
+            def vault_provider():
+                return export_passwords_bridge(self.db.get_all_passwords(), self.auth.key)
 
-            # 2. Iniciar Servidor
-            vault_b64 = base64.b64encode(vault_bytes).decode()
-            config = self.server.start(vault_b64)
+            # Iniciar Servidor con proveedor dinámico
+            config = self.server.start(vault_provider)
             
             # 3. Generar QR (Data URI completo)
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj['question']}"
+            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
+            self.qr_payload = qr_payload
             self.qr_image.src = self.generate_qr_base64(qr_payload)
             self.qr_image.visible = True
+            self.copy_btn.visible = True
             
             # 4. Actualizar UI
             self.pin_text.value = config["pin"]
@@ -249,13 +242,12 @@ class SyncHostView:
             config = self.server.last_config
             if not config: return
             
-            # Re-generar QR
-            questions = self.auth.get_user_questions()
-            q_obj = random.choice(questions) if questions else {"question": "Desconocida"}
-            
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj.get('question','')}"
+            # Re-generar QR (formato actual sin pregunta de seguridad)
+            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
+            self.qr_payload = qr_payload
             self.qr_image.src = self.generate_qr_base64(qr_payload)
             self.qr_image.visible = True
+            self.copy_btn.visible = True
             
             self.pin_text.value = config["pin"]
             self.pin_area.visible = True

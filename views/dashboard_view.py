@@ -810,7 +810,10 @@ class DashboardView:
         self.page.update()
 
     def open_sync_host(self, e=None):
-        self.on_navigate("sync_host")
+        if type(self.bridge_server).__name__ == "BridgeClient":
+            self.on_navigate("sync_client")
+        else:
+            self.on_navigate("sync_host")
 
     def open_push_menu(self, pw_id):
         """Abre un diálogo para elegir qué enviar al móvil."""

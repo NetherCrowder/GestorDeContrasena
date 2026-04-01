@@ -46,6 +46,25 @@ class SyncClientView:
             color=ft.Colors.WHITE,
             on_click=self.attempt_connect
         )
+        
+        self.paste_btn = ft.Row([
+            ft.TextButton("Pegar desde Portapapeles", icon=ft.Icons.CONTENT_PASTE, on_click=self.paste_qr),
+        ], alignment=ft.MainAxisAlignment.CENTER)
+        
+        self.ip_label = ft.Text("O usa la IP directamente:", size=12, color=ft.Colors.WHITE24)
+
+        # Restaurar estado visual si la conexión persiste en segundo plano
+        if self.client.is_listening:
+            self.pin_input.visible = False
+            self.ip_input.visible = False
+            self.ip_label.visible = False
+            self.paste_btn.visible = False
+            
+            self.status_text.value = "🟢 Vinculado correctamente"
+            self.status_text.color = ft.Colors.CYAN
+            self.connect_btn.text = "Cerrar Conexión"
+            self.connect_btn.bgcolor = ft.Colors.RED_700
+            self.connect_btn.on_click = self.disconnect
 
     def build(self):
         return ft.Container(
@@ -69,12 +88,9 @@ class SyncClientView:
                     ft.Container(height=20),
                     
                     self.pin_input,
-                    ft.Text("O usa la IP directamente:", size=12, color=ft.Colors.WHITE24),
+                    self.ip_label,
                     self.ip_input,
-                    
-                    ft.Row([
-                        ft.TextButton("Pegar desde Portapapeles", icon=ft.Icons.CONTENT_PASTE, on_click=self.paste_qr),
-                    ], alignment=ft.MainAxisAlignment.CENTER),
+                    self.paste_btn,
                     
                     ft.Container(height=10),
                     ft.Row([self.loading_ring, self.status_text], alignment=ft.MainAxisAlignment.CENTER),
@@ -126,12 +142,29 @@ class SyncClientView:
                 # Clave determinista basada en el PIN
                 key = hashlib.sha256(code.encode()).digest() 
 
-            def on_vault_received(vault_data_b64):
-                self.show_snackbar("📦 Bóveda recibida. Ve a Restaurar para aplicar.")
+            def on_vault_received(vault_b64: str):
+                """Aplica la bóveda del PC a la BD local con estrategia Merge."""
+                try:
+                    from utils.backup import apply_bridge_vault
+                    ins, upd, skp = apply_bridge_vault(vault_b64, self.db, self.auth.key)
+                    total = ins + upd
+                    if total > 0:
+                        self.show_snackbar(f"📦 {ins} nuevas, {upd} actualizadas, {skp} sin cambios.")
+                        # Notificar al sistema global para refrescar la UI
+                        if self.client.on_vault_sync:
+                            self.client.on_vault_sync(ins, upd)
+                    else:
+                        self.show_snackbar("✅ Bóveda ya está sincronizada.")
+                except Exception as ex:
+                    self.show_snackbar(f"⚠️ Error aplicando bóveda: {ex}")
 
             def on_clipboard_received(text):
-                self.page.set_clipboard(text)
-                self.show_snackbar("📋 Portapapeles actualizado desde PC")
+                try:
+                    import subprocess
+                    subprocess.run("clip", input=text.strip().encode("utf-16le"), check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.show_snackbar("📋 Portapapeles actualizado desde PC")
+                except Exception as ex:
+                    print("Error seteando clipboard local:", ex)
 
             # 1. INTENTAR CONEXIÓN REAL (HANDSHAKE)
             success = self.client.connect(
@@ -144,12 +177,21 @@ class SyncClientView:
             )
             
             if success:
+                self.pin_input.visible = False
+                self.ip_input.visible = False
+                self.ip_label.visible = False
+                self.paste_btn.visible = False
+                
+                # Guardar credenciales para reconexion automática futura
+                self.client.save_pairing()
+                
                 self.status_text.value = "🟢 Vinculado correctamente"
                 self.status_text.color = ft.Colors.CYAN
                 self.connect_btn.text = "Cerrar Conexión"
                 self.connect_btn.bgcolor = ft.Colors.RED_700
                 self.connect_btn.on_click = self.disconnect
                 self.connect_btn.disabled = False
+                self.show_snackbar("🔒 Pairing guardado. La próxima vez se reconectará automáticamente.")
             else:
                 raise Exception("El servidor no respondió o el PIN es incorrecto")
                 
@@ -164,6 +206,14 @@ class SyncClientView:
 
     def disconnect(self, e):
         self.client.stop_listener()
+        self.client.clear_pairing()  # Borrar pairing guardado al desconectar manualmente
+        
+        self.pin_input.visible = True
+        self.ip_input.visible = True
+        self.ip_label.visible = True
+        self.paste_btn.visible = True
+        self.pin_input.value = ""
+        
         self.status_text.value = "Desconectado"
         self.status_text.color = ft.Colors.WHITE54
         self.connect_btn.text = "Vincular ahora"
@@ -172,9 +222,12 @@ class SyncClientView:
         self.page.update()
 
     def paste_qr(self, e):
-        # Obtener contenido del portapapeles
+        # Obtener contenido del portapapeles usando PowerShell como bypass nativo
         try:
-            text = self.page.get_clipboard()
+            import subprocess
+            res = subprocess.run(["powershell", "-command", "Get-Clipboard"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            text = res.stdout.strip()
+            
             if text:
                 self.pin_input.value = text
                 self.pin_input.update()
