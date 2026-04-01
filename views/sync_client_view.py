@@ -32,7 +32,7 @@ class SyncClientView:
             label="IP del PC (opcional si usas PIN)",
             hint_text="192.168.1.XX",
             width=250,
-            keyboard_type=ft.KeyboardType.IP,
+            keyboard_type=ft.KeyboardType.TEXT,
         )
         
         self.status_text = ft.Text("Listo para vincular", size=14, color=ft.Colors.WHITE54)
@@ -121,16 +121,11 @@ class SyncClientView:
                 key = b'00000000000000000000000000000000' # Clave debil para PIN (mejorar después)
 
             def on_vault_received(vault_data_b64):
-                # Aquí llamaríamos a la lógica de importación con la pregunta recibida
-                self.page.snack_bar = ft.SnackBar(ft.Text("📦 Bóveda recibida. Ve a Restaurar para aplicar."))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.show_snackbar("📦 Bóveda recibida. Ve a Restaurar para aplicar.")
 
             def on_clipboard_received(text):
                 self.page.set_clipboard(text)
-                self.page.snack_bar = ft.SnackBar(ft.Text("📋 Portapapeles actualizado desde PC"))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.show_snackbar("📋 Portapapeles actualizado desde PC")
 
             # Iniciar conexión
             success = self.client.connect(
@@ -149,9 +144,15 @@ class SyncClientView:
                 raise Exception("El PC rechazó la conexión o no es visible")
                 
         except Exception as ex:
+            self.show_snackbar(f"Error: {ex}")
             self.status_text.value = f"❌ {str(ex)}"
             self.status_text.color = ft.Colors.RED
             self.connect_btn.disabled = False
             
         self.loading_ring.visible = False
+        self.page.update()
+
+    def show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg))
+        self.page.snack_bar.open = True
         self.page.update()

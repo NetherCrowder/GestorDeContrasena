@@ -70,6 +70,17 @@ def main(page: ft.Page):
                 )
                 page.add(dashboard.build())
 
+            elif view_name == "sync_host":
+                from views.sync_host_view import SyncHostView
+                from utils.sync_service import BridgeServer
+                # Nota: En móvil usamos un BridgeServer genérico para pruebas o hotspot
+                bridge_server = BridgeServer() 
+                sync_view = SyncHostView(
+                    page, db, auth, bridge_server,
+                    on_back=lambda: navigate("dashboard")
+                )
+                page.add(sync_view.build())
+
             elif view_name == "sync_client":
                 from views.sync_client_view import SyncClientView
                 sync_view = SyncClientView(

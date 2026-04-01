@@ -803,12 +803,9 @@ class DashboardView:
         self.page.update()
 
     def show_snackbar(self, msg: str):
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg, color=ft.Colors.WHITE), bgcolor="#333333")
-        self.page.update()
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg))
         self.page.snack_bar.open = True
         self.page.update()
 
     def open_sync_client(self, e=None):
         self.on_navigate("sync_client")
-        self.page.snack_bar.open = True
-        self.page.update()
