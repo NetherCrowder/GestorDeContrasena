@@ -15,8 +15,6 @@ import hmac
 import urllib.request
 import queue
 import asyncio
-from fastapi import FastAPI, Request, Response, HTTPException
-import uvicorn
 from icecream import ic
 
 # Importación de pyaes (asumiendo que está en el root)
@@ -79,18 +77,16 @@ class SessionEncryptor:
             return None
 
 # ------------------------------------------------------------------ #
-class NoSignalServer(uvicorn.Server):
-    """Sobreescribe Uvicorn para que no intente capturar señales de apagado en el hilo daemon."""
-    def install_signal_handlers(self):
-        pass
 
 class BridgeServer:
     """Implementación del Servidor de Sincronización usando FastAPI y Uvicorn."""
     
     def __init__(self, port=DEFAULT_PORT):
+        from fastapi import FastAPI
         self.port = port
         self.uvicorn_server = None
         self.thread = None
+        self.app = FastAPI(title="KeyVault Sync Server")
         self.session_token = None
         self.session_key = None
         self.encryptor = None
@@ -102,7 +98,6 @@ class BridgeServer:
         self._pairing_file = None
         self.vault_provider = None  # callable() -> str (b64 fresco en cada request)
         
-        self.app = FastAPI(docs_url=None, redoc_url=None) # Sin docs por seguridad
         self._setup_routes()
 
     def set_pairing_file(self, path: str):
@@ -141,6 +136,8 @@ class BridgeServer:
             os.remove(self._pairing_file)
 
     def _setup_routes(self):
+        from fastapi import Request, Response, HTTPException
+        
         @self.app.middleware("http")
         async def check_token(request: Request, call_next):
             if request.url.path == "/":
@@ -202,6 +199,13 @@ class BridgeServer:
         """Inicia el servidor Uvicorn en un hilo daemon.
         vault_provider: callable sin argumentos que retorna el vault b64 fresco.
         """
+        import uvicorn
+        
+        class NoSignalServer(uvicorn.Server):
+            """Sobreescribe Uvicorn para que no intente capturar señales en el hilo daemon."""
+            def install_signal_handlers(self):
+                pass
+                
         if not self._load_server_pairing():
             self.session_key = os.urandom(32)
             self.session_token = base64.b64encode(os.urandom(12)).decode("utf-8").replace("=", "")

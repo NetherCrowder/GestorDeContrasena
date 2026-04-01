@@ -49,9 +49,14 @@ def main(page: ft.Page):
         db = DatabaseManager()
         db.connect()
         auth = AuthManager(db)
+        
+        import sys
+        
+        # Detección real de entorno Móvil (Android/iOS) + Flag local de pruebas
+        is_mobile = "--mobile" in sys.argv or "android" in str(page.platform).lower() or "ios" in str(page.platform).lower()
 
-        # Servicios de Sincronización Globales (Persistentes)
-        bridge_server = BridgeServer()
+        # Servicios de Sincronización Globales
+        bridge_server = BridgeServer() if not is_mobile else None
         bridge_client = BridgeClient()
 
         def global_clipboard_alert(text):
@@ -130,9 +135,10 @@ def main(page: ft.Page):
                        os.environ.get("LOCALAPPDATA", "") or 
                        os.path.expanduser("~")) / "KeyVault"
         _kv_dir.mkdir(parents=True, exist_ok=True)
-        _suffix = "_mobile_test" if "--mobile" in sys.argv else ""
+        _suffix = "_mobile_test" if is_mobile else ""
         bridge_client.set_pairing_file(str(_kv_dir / f"pairing{_suffix}.json"))
-        bridge_server.set_pairing_file(str(_kv_dir / "server_pairing.json"))
+        if bridge_server is not None:
+            bridge_server.set_pairing_file(str(_kv_dir / "server_pairing.json"))
 
         # Estado compartido para el callback de sincronización global
         _current_view = {"name": "login"}
@@ -159,8 +165,7 @@ def main(page: ft.Page):
         # ------------------------------------------------------------------ #
         #  Demonio de Sincronización Continua (Móvil)
         # ------------------------------------------------------------------ #
-        import sys
-        if "--mobile" in sys.argv:
+        if is_mobile:
             def _global_vault_polling_daemon():
                 import time
                 import threading

@@ -1,9 +1,5 @@
-feat(sync): motor de sincronización continua, auto-reconexión P2P y merge por timestamp
+fix(android): resolución de crasheos nativos en Flet (Permisos y FastAPI)
 
-Implementación de la fase final de estabilización del túnel P2P (PC <-> Móvil):
-
-- Auto-Reconexión Inteligente: Implementado _reconnect_watcher y detección de caídas mediante fallos de heartbeat. El cliente móvil retiene el pairing en memoria y se reconecta silenciosamente.
-- Demonio de Sync Global: Creado _global_vault_polling_daemon en main.py para asegurar que el móvil descargue y fusione contraseñas cada 15s siempre que haya conexión.
-- Fusión (Merge) Precisa: Agregado upsert_from_bridge a la base de datos para respetar el updated_at original del PC. Esto corrige el bug de contraseñas no sincronizadas.
-- Persistencia del Servidor: El host (PC) mantiene el servidor corriendo en segundo plano sin cerrarse al cambiar de pestaña en la interfaz.
-- UI Reactiva: Integración de callbacks globales on_vault_sync que actualizan el Dashboard dinámicamente sin interrumpir la experiencia del usuario.
+- Storage Persistente (Android): Utilizado FLET_APP_STORAGE_DATA para evitar intentar crear archivos de logs (.txt) o configuración en la carpeta inescribible /data/ o /home/ de Linux/Android.
+- Aislamiento de Librerías "Server-side": Encapsuladas las importaciones de fastapi y uvicorn dentro class BridgeServer usando importaciones interiores ("lazy loading"). Esto previno que el Mobile Client Android arrojara ModuleNotFoundError al no compilar componentes en Rust de Pydantic.
+- Detección Dinámica de Plataforma: Implementado `is_mobile = page.platform` junto con sys.argv para detectar realmente si nos encontramos en el framework Android y evitar crear instancias innecesarias del Servidor en el celular.
