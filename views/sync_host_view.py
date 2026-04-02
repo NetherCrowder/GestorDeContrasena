@@ -4,8 +4,6 @@ Muestra el QR y el PIN para que el móvil se vincule.
 """
 
 import flet as ft
-import qrcode
-import io
 import base64
 import random
 from utils.sync_service import BridgeServer
@@ -24,15 +22,22 @@ class SyncHostView:
         
         # Componentes UI
         self.status_text = ft.Text("Puente Desconectado", size=16, color=ft.Colors.WHITE54)
-        self.qr_image = ft.Image(
-            src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-            width=250, height=250, border_radius=12, visible=False
-        )
-        self.pin_text = ft.Text("", size=40, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN)
+        
+        self.pin_text = ft.Text("", size=60, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN, selectable=True)
         self.pin_area = ft.Column([
-            ft.Text("PIN de Respaldo", size=12, color=ft.Colors.WHITE38),
+            ft.Text("PASO 1: PIN NUMÉRICO", size=14, weight=ft.FontWeight.W_800, color=ft.Colors.WHITE60),
+            ft.Text("Ingresa este código en tu dispositivo móvil", size=12, color=ft.Colors.WHITE38),
             self.pin_text,
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
+
+        self.alpha_text = ft.Text("", size=50, weight=ft.FontWeight.BOLD, color=ft.Colors.AMBER_400, selectable=True)
+        self.alpha_area = ft.Column([
+            ft.Divider(height=30, color=ft.Colors.WHITE10),
+            ft.Text("PASO 2: VERIFICACIÓN DE SEGURIDAD", size=14, weight=ft.FontWeight.W_800, color=ft.Colors.AMBER_700),
+            ft.Text("¡Dispositivo detectado! Confirma con esta clave:", size=12, color=ft.Colors.WHITE38),
+            self.alpha_text,
+        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
+        
         self.ip_text = ft.Text("", size=14, color=ft.Colors.WHITE38)
         self.clients_list = ft.Column(spacing=5)
         
@@ -83,8 +88,8 @@ class SyncHostView:
                         content=ft.Column(
                             [
                                 self.status_text,
-                                self.qr_image,
                                 self.pin_area,
+                                self.alpha_area,
                                 self.ip_text,
                             ],
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -112,16 +117,7 @@ class SyncHostView:
             bgcolor="#0f172a",
         )
 
-    def generate_qr_base64(self, data):
-        qr = qrcode.QRCode(version=1, box_size=10, border=2)
-        qr.add_data(data)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        raw_b64 = base64.b64encode(buffered.getvalue()).decode()
-        return f"data:image/png;base64,{raw_b64}"
+
 
     def toggle_bridge(self, e):
         if not self.is_active:
@@ -154,29 +150,29 @@ class SyncHostView:
             vault_b64 = base64.b64encode(vault_bytes).decode()
             config = self.server.start(vault_b64)
             
-            # 3. Generar QR (Data URI completo)
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj['question']}"
-            self.qr_image.src = self.generate_qr_base64(qr_payload)
-            self.qr_image.visible = True
+            # Guardamos el formato de pregunta en la instancia por si es requerido después
+            self.current_q_obj = q_obj
             
             # 4. Actualizar UI
             self.pin_text.value = config["pin"]
+            self.alpha_text.value = config["alpha"]
             self.pin_area.visible = True
+            self.alpha_area.visible = False # Invisible hasta que alguien haga handshake
             self.ip_text.value = f"Servidor activo en: {config['ip']}"
-            self.status_text.value = "🟢 Esperando conexión..."
+            self.status_text.value = "🟢 Esperando PIN Numérico..."
             self.status_text.color = ft.Colors.CYAN
             self.start_btn.text = "Detener Puente"
             self.start_btn.bgcolor = ft.Colors.RED_700
             
             self.is_active = True
-            ic("Servidor de sincronización iniciado")
+            print("Servidor de sincronización iniciado (2-Step Auth)")
             
             # Iniciar refresco de clientes si no está corriendo
             if not self.refresh_loop_running:
                 self.page.run_task(self.refresh_clients_loop)
             
         except Exception as ex:
-            ic(f"Fallo al iniciar servidor: {ex}")
+            print(f"Fallo al iniciar servidor: {ex}")
             self.page.snack_bar = ft.SnackBar(ft.Text(f"Error: {ex}"))
             self.page.snack_bar.open = True
             
@@ -184,8 +180,8 @@ class SyncHostView:
 
     def stop_bridge(self):
         self.server.stop()
-        self.qr_image.visible = False
         self.pin_area.visible = False
+        self.alpha_area.visible = False
         self.ip_text.value = ""
         self.status_text.value = "Puente Desconectado"
         self.status_text.color = ft.Colors.WHITE54
@@ -216,7 +212,7 @@ class SyncHostView:
                 for ip in to_remove:
                     if ip in clients: del clients[ip]
                 
-                # Actualizar UI
+                # Actualizar lista de clientes conectados
                 self.clients_list.controls = [
                     ft.Row([
                         ft.Icon(ft.Icons.PHONELINK_LOCK, size=16, color=ft.Colors.GREEN),
@@ -227,11 +223,42 @@ class SyncHostView:
                 if not active_clients:
                     self.clients_list.controls = [ft.Text("Esperando conexiones...", size=12, italic=True, color=ft.Colors.WHITE38)]
                 
+                # Monitor de 'Toque' inicial (Paso 1)
+                if self.server.pending_handshakers:
+                    if not self.alpha_area.visible:
+                        self.alpha_area.visible = True
+                        self.status_text.value = "🟡 Validando Paso 2..."
+                        self.status_text.color = ft.Colors.AMBER_400
+                
+                # Gestión de Eventos de Autenticación (Feedback Paso 2)
+                while self.server.auth_events:
+                    ev_type, ev_ip, _ = self.server.auth_events.pop(0)
+                    if ev_type == "success":
+                        self.page.snack_bar = ft.SnackBar(
+                            ft.Text(f"Cliente ({ev_ip}) conectado"),
+                            bgcolor=ft.Colors.GREEN_700,
+                            duration=3000
+                        )
+                    else:
+                        self.page.snack_bar = ft.SnackBar(
+                            ft.Text(f"Cliente (IP: {ev_ip}) no ha podido conectarse"),
+                            bgcolor=ft.Colors.RED_700,
+                            duration=4000
+                        )
+                    self.page.snack_bar.open = True
+                    
+                    # Forzar actualización de PINs y limpiar UI
+                    self.pin_text.value = self.server.numeric_pin
+                    self.alpha_text.value = self.server.alpha_key
+                    self.alpha_area.visible = False
+                    self.status_text.value = "🟢 Esperando PIN Numérico..."
+                    self.status_text.color = ft.Colors.CYAN
+
                 self.page.update()
             except Exception as e:
-                ic(f"Error en refresh loop: {e}")
+                print(f"Error en refresh loop: {e}")
             
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
         self.refresh_loop_running = False
 
     def show_snackbar(self, msg: str):
@@ -249,19 +276,14 @@ class SyncHostView:
             config = self.server.last_config
             if not config: return
             
-            # Re-generar QR
-            questions = self.auth.get_user_questions()
-            q_obj = random.choice(questions) if questions else {"question": "Desconocida"}
-            
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}|{q_obj.get('question','')}"
-            self.qr_image.src = self.generate_qr_base64(qr_payload)
-            self.qr_image.visible = True
-            
             self.pin_text.value = config["pin"]
+            self.alpha_text.value = config["alpha"]
             self.pin_area.visible = True
+            self.alpha_area.visible = bool(self.server.pending_handshakers)
+            
             self.ip_text.value = f"Servidor activo en: {config['ip']}"
-            self.status_text.value = "🟢 Puente Activo"
-            self.status_text.color = ft.Colors.CYAN
+            self.status_text.value = "🟢 Puente Activo" if not self.server.pending_handshakers else "🟡 Validando Paso 2..."
+            self.status_text.color = ft.Colors.CYAN if not self.server.pending_handshakers else ft.Colors.AMBER_400
             self.start_btn.text = "Detener Puente"
             self.start_btn.bgcolor = ft.Colors.RED_700
             
