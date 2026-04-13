@@ -450,9 +450,24 @@ class BridgeServer:
         ic("BridgeServer detenido.")
 
     def push_clipboard(self, content: str):
-        """Envía contenido al portapapeles de todos los clientes conectados."""
+        """Envía contenido al portapapeles de TODOS los clientes conectados."""
         for q in self.client_queues.values():
             q.put(content)
+
+    def push_to_device(self, device_id: str, content: str) -> bool:
+        """Envía contenido al portapapeles de UN dispositivo específico.
+        
+        Returns True si el dispositivo está en línea, False si no se encontró.
+        """
+        info = self.connected_clients.get(device_id)
+        if not info:
+            return False
+        ip = info.get("ip")
+        q = self.client_queues.get(ip)
+        if q:
+            q.put(content)
+            return True
+        return False
 
     def get_local_ip(self):
         try:
