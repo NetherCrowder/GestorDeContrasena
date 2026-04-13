@@ -50,7 +50,7 @@ def main(page: ft.Page):
         auth = AuthManager(db)
         
         # Servicios de Sincronización Globales (Solo Cliente/Móvil)
-        bridge_client = BridgeClient(db, auth)
+        bridge_client = BridgeClient()
 
         # Exponer estado y servicios globales en la página
         page.is_mobile = True
@@ -125,7 +125,7 @@ def main(page: ft.Page):
                         tmp = SyncClientView(page, db, auth, bridge_client, on_back=lambda: None)
                         tmp.import_vault_data(v)
 
-                    success = bridge_client.attempt_silent_handshake(
+                    success = getattr(bridge_client, "attempt_silent_handshake", lambda *a: False)(
                         last_server_ip, 5005, device_id, trust_token
                     )
                     if success:

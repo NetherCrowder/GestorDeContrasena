@@ -50,7 +50,7 @@ def main(page: ft.Page):
         auth = AuthManager(db)
         
         # Servicios de Sincronización Globales (Solo Servidor en PC)
-        bridge_server = BridgeServer(db_manager=db)
+        bridge_server = BridgeServer()
         
         # Configurar recepción de datos desde el móvil (Push)
         def process_remote_vault(data_list):
