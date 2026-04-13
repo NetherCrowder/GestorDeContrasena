@@ -56,6 +56,22 @@ class SyncHostView:
             on_click=self.toggle_bridge
         )
 
+        # --- Controles de Grupo B ---
+        self.history_btn = ft.IconButton(
+            ft.Icons.HISTORY, tooltip="Historial de Conexiones",
+            icon_size=18, icon_color=ft.Colors.CYAN_300,
+            on_click=self._show_history_dialog,
+            visible=False
+        )
+        self.revoke_all_btn = ft.TextButton(
+            "Desconectar Todos",
+            icon=ft.Icons.BLOCK,
+            icon_color=ft.Colors.RED_400,
+            style=ft.ButtonStyle(color=ft.Colors.RED_400),
+            on_click=self._revoke_all_devices,
+            visible=False
+        )
+
         self._ui_loop_running = False
 
     def build(self):
@@ -91,8 +107,13 @@ class SyncHostView:
 
         clients_card = ft.Container(
             content=ft.Column([
-                ft.Text("Dispositivos Conectados", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE60),
+                ft.Row([
+                    ft.Text("Dispositivos Conectados", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE60),
+                    ft.Container(expand=True),
+                    self.history_btn
+                ]),
                 self.clients_list,
+                ft.Row([self.revoke_all_btn], alignment=ft.MainAxisAlignment.END)
             ], spacing=8),
             bgcolor="#1a2332",
             padding=ft.padding.all(16),
@@ -223,6 +244,8 @@ class SyncHostView:
             self.alpha_display.value = config.get("alpha", "-------")
             self.ip_text.value = f"{config['ip']}:{config['port']}"
             self.pin_copy_btn.visible = True
+            self.history_btn.visible = True
+            self.revoke_all_btn.visible = True
             self.toggle_btn.text = "Detener Puente"
             self.toggle_btn.style = ft.ButtonStyle(bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE)
         else:
@@ -234,6 +257,8 @@ class SyncHostView:
             self.timer_text.value = "⏱ Renueva en: --s"
             self.ip_text.value = ""
             self.pin_copy_btn.visible = False
+            self.history_btn.visible = False
+            self.revoke_all_btn.visible = False
             self.clients_list.controls = []
             self.toggle_btn.text = "Iniciar Puente Seguro"
             self.toggle_btn.style = ft.ButtonStyle(bgcolor=ft.Colors.CYAN_700, color=ft.Colors.WHITE)
@@ -286,6 +311,12 @@ class SyncHostView:
                                     f"Hace {ago}s", size=11, color=ft.Colors.WHITE38
                                 ),
                                 ft.IconButton(
+                                    ft.Icons.LOCK_OUTLINE, icon_size=14, tooltip="Bloqueo Remoto",
+                                    icon_color=ft.Colors.AMBER_400,
+                                    data=did,
+                                    on_click=self._lock_device
+                                ),
+                                ft.IconButton(
                                     ft.Icons.LINK_OFF, icon_size=14, tooltip="Revocar",
                                     icon_color=ft.Colors.RED_300,
                                     data=did,
@@ -310,11 +341,69 @@ class SyncHostView:
         self._ui_loop_running = False
 
     def _revoke_device(self, e):
-        """Revoca el acceso de un dispositivo."""
+        """Revoca el acceso de un dispositivo secundario."""
         did = e.control.data
-        self.server.trusted_devices.pop(did, None)
-        self.server.connected_clients.pop(did, None)
-        self._show_snackbar(f"Dispositivo {did} desconectado.")
+        self.server.revoke_device(did)
+        self._show_snackbar(f"Dispositivo desconectado.")
+
+    def _revoke_all_devices(self, e):
+        """Revoca a todos los dispositivos."""
+        self.server.revoke_all_devices()
+        self._show_snackbar("Todos los dispositivos han sido desconectados.")
+
+    def _lock_device(self, e):
+        """Envía comando de bloqueo remoto."""
+        did = e.control.data
+        if self.server.lock_device(did):
+            self._show_snackbar("Comando de bloqueo enviado al dispositivo.")
+        else:
+            self._show_snackbar("Error: el dispositivo no responde.")
+
+    def _show_history_dialog(self, e):
+        """Muestra el historial de conexiones."""
+        events = self.server.get_connection_history()
+        from datetime import datetime
+
+        if not events:
+            controls = [ft.Text("No hay eventos recientes.", size=13, color=ft.Colors.WHITE38)]
+        else:
+            controls = []
+            for ev_type, ip, ts in reversed(events):
+                dt = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+                color, icon, text = ft.Colors.WHITE54, ft.Icons.INFO_OUTLINE, "Evento desconocido"
+                
+                if ev_type == "success":
+                    color, icon, text = ft.Colors.GREEN_400, ft.Icons.CHECK_CIRCLE, "Conexión exitosa"
+                elif ev_type == "step1_ok":
+                    color, icon, text = ft.Colors.CYAN_300, ft.Icons.LOCK_OPEN, "PIN aceptado (Paso 1)"
+                elif ev_type == "step1_fail":
+                    color, icon, text = ft.Colors.RED_300, ft.Icons.ERROR_OUTLINE, "Intento fallido (PIN)"
+                elif ev_type == "step2_fail":
+                    color, icon, text = ft.Colors.RED_300, ft.Icons.ERROR_OUTLINE, "Intento fallido (Clave)"
+
+                controls.append(
+                    ft.Row([
+                        ft.Icon(icon, color=color, size=16),
+                        ft.Text(f"[{dt}] {ip}", size=12, color=ft.Colors.WHITE70, expand=True),
+                        ft.Text(text, size=12, color=color),
+                    ])
+                )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Historial de Conexiones", size=16, weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                content=ft.Column(controls, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=350, height=250
+            ),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Cerrar", on_click=lambda _: setattr(dialog, "open", False) or self.page.update())
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
 
     def _show_snackbar(self, msg: str):
         self.page.snack_bar = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.BLUE_GREY_800)

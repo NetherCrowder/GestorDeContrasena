@@ -469,6 +469,33 @@ class BridgeServer:
             return True
         return False
 
+    # --- Grupo B: Control y Seguridad ---
+    
+    def revoke_device(self, device_id: str):
+        """Revoca el acceso de un dispositivo específico."""
+        self.trusted_devices.pop(device_id, None)
+        self.connected_clients.pop(device_id, None)
+        ic(f"Dispositivo revocado: {device_id}")
+
+    def revoke_all_devices(self):
+        """Revoca el acceso a todos los dispositivos conectados."""
+        self.trusted_devices.clear()
+        self.connected_clients.clear()
+        self.client_queues.clear()
+        ic("Todos los dispositivos han sido revocados.")
+
+    def lock_device(self, device_id: str) -> bool:
+        """Envía un comando de bloqueo remoto a un dispositivo específico."""
+        return self.push_to_device(device_id, ":::KV_CMD_LOCK:::")
+        
+    def lock_all_devices(self):
+        """Envía un comando de bloqueo remoto a todos los dispositivos."""
+        self.push_clipboard(":::KV_CMD_LOCK:::")
+
+    def get_connection_history(self) -> list:
+        """Retorna el historial de eventos de autenticación."""
+        return self.auth_events
+
     def get_local_ip(self):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -186,10 +186,20 @@ def start_clipboard_thread(base_url: str, token: str, enc: SessionEncryptor):
                         decrypted = enc.decrypt(raw.get("data", ""))
                         if decrypted:
                             consecutive_errors = 0
+                            if decrypted == ":::KV_CMD_LOCK:::":
+                                print("\n\n" + "⚠️" * 25)
+                                print("  BLOQUEO REMOTO RECIBIDO DEL SERVIDOR")
+                                print("  Se borrará la configuración y se cerrará la sesión.")
+                                print("⚠️" * 25 + "\n")
+                                if os.path.exists(PAIRING_FILE):
+                                    os.remove(PAIRING_FILE)
+                                os._exit(0) # Salir inmediatamente
+
                             _push_count[0] += 1
                             ts = datetime.now().strftime("%H:%M:%S")
                             # Separador visual prominente para no perderse el push
                             print(f"\n  {'─'*50}")
+
                             print(f"  📲 PUSH RECIBIDO [{ts}] #{_push_count[0]}")
                             print(f"  Valor: {decrypted}")
                             print(f"  {'─'*50}")
