@@ -61,6 +61,11 @@ class DatabaseManager:
             self.migrate_temp_passwords()
             ic("DATABASE CONNECT: Seeding categories...")
             self.seed_categories()
+            
+            # Inicializar versión de sincronización si no existe
+            if self.get_config("sync_version") is None:
+                self.set_config("sync_version", "0")
+                
             self.conn.commit()
             ic("DATABASE CONNECT: Database ready.")
         except sqlite3.OperationalError as e:
@@ -92,6 +97,16 @@ class DatabaseManager:
                 DEFAULT_CATEGORIES,
             )
 
+    def _increment_version(self):
+        """Incrementa la versión de la base de datos para notificar cambios por red."""
+        try:
+            v_str = self.get_config("sync_version") or "0"
+            new_v = int(v_str) + 1
+            self.set_config("sync_version", str(new_v))
+            ic(f"DATABASE: Version incremented to {new_v}")
+        except Exception as e:
+            ic(f"Error incrementing sync version: {e}")
+
     # ------------------------------------------------------------------ #
     #  CRUD - Contraseñas
     # ------------------------------------------------------------------ #
@@ -110,6 +125,7 @@ class DatabaseManager:
              is_favorite, rules_json, now, now),
         )
         self.conn.commit()
+        self._increment_version()
         return cur.lastrowid
 
     def get_all_passwords(self) -> list[dict]:
@@ -144,6 +160,7 @@ class DatabaseManager:
             f"UPDATE passwords SET {set_clause} WHERE id = ?", values
         )
         self.conn.commit()
+        self._increment_version()
 
     def upsert_from_bridge(self, title: str, username: bytes, password: bytes,
                            url: str, category_id: int, notes: bytes,
@@ -183,6 +200,7 @@ class DatabaseManager:
     def delete_password(self, pw_id: int) -> None:
         self.conn.execute("DELETE FROM passwords WHERE id = ?", (pw_id,))
         self.conn.commit()
+        self._increment_version()
 
     def search_passwords(self, query: str) -> list[dict]:
         """Busca contraseñas por título (texto plano)."""
@@ -205,6 +223,62 @@ class DatabaseManager:
         )
         return {row["category_id"]: row["cnt"] for row in cur.fetchall()}
 
+    def import_from_list(self, data_list: list[dict], master_key: bytes) -> int:
+        """Importación inteligente desde una lista de diccionarios (Sincronización)."""
+        from security.crypto import encrypt, decrypt
+        
+        current_passwords = self.get_all_passwords()
+        # Crear mapa de existencia: (título, usuario_plano, categoría) -> id
+        existing_map = {}
+        for lp in current_passwords:
+            u_plain = ""
+            try:
+                u_plain = decrypt(lp["username"], master_key) if lp["username"] else ""
+            except: pass
+            existing_map[(lp["title"], u_plain, lp["category_id"])] = lp["id"]
+
+        count = 0
+        all_cats = self.get_all_categories()
+        valid_ids = [c["id"] for c in all_cats]
+
+        for item in data_list:
+            cat_id = item.get("category_id", 8)
+            if cat_id not in valid_ids: cat_id = 8
+
+            title = item.get("title", "Sincronizado")
+            u_plain = item.get("username", "")
+            p_plain = item.get("password", "")
+            n_plain = item.get("notes", "")
+            url = item.get("url", "")
+
+            enc_user = encrypt(u_plain, master_key)
+            enc_pass = encrypt(p_plain, master_key)
+            enc_note = encrypt(n_plain, master_key) if n_plain else b""
+
+            key = (title, u_plain, cat_id)
+            if key in existing_map:
+                pw_id = existing_map[key]
+                self.update_password(
+                    pw_id,
+                    password=enc_pass,
+                    notes=enc_note,
+                    url=url
+                )
+            else:
+                self.add_password(
+                    title=title,
+                    username=enc_user,
+                    password=enc_pass,
+                    url=url,
+                    notes=enc_note,
+                    category_id=cat_id
+                )
+            count += 1
+        
+        self.conn.commit()
+        self._increment_version()
+        return count
+
     # ------------------------------------------------------------------ #
     #  CRUD - Categorías
     # ------------------------------------------------------------------ #
@@ -214,11 +288,12 @@ class DatabaseManager:
 
     def add_category(self, name: str, icon: str = "MORE_HORIZ",
                      color: str = "#607D8B") -> int:
-        cur = self.conn.execute(
+        self.conn.execute(
             "INSERT INTO categories (name, icon, color, is_custom) VALUES (?, ?, ?, 1)",
             (name, icon, color),
         )
         self.conn.commit()
+        self._increment_version()
         return cur.lastrowid
 
     def delete_category(self, cat_id: int) -> None:
@@ -228,6 +303,7 @@ class DatabaseManager:
         )
         self.conn.execute("DELETE FROM categories WHERE id = ? AND is_custom = 1", (cat_id,))
         self.conn.commit()
+        self._increment_version()
 
     # ------------------------------------------------------------------ #
     #  Preguntas de seguridad
@@ -297,4 +373,50 @@ class DatabaseManager:
     def delete_temp_password(self, temp_id: int) -> None:
         """Elimina una contraseña temporal por su ID."""
         self.conn.execute("DELETE FROM temp_passwords WHERE id = ?", (temp_id,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ #
+    #  Gestión de Dispositivos de Confianza (Sync P2P)
+    # ------------------------------------------------------------------ #
+    def register_trusted_device(self, device_id: str, name: str, token: str):
+        """Registra un dispositivo y mantiene solo los últimos 5."""
+        now = datetime.now().isoformat()
+        # Eliminar si ya existe para actualizar
+        self.conn.execute("DELETE FROM trusted_sync_devices WHERE device_id = ?", (device_id,))
+        
+        # Insertar nuevo
+        self.conn.execute(
+            """INSERT INTO trusted_sync_devices 
+               (device_id, device_name, trust_token, last_connected, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (device_id, name, token, now, now)
+        )
+        
+        # Mantener solo 5 (los más recientes por conexión)
+        self.conn.execute(
+            """DELETE FROM trusted_sync_devices 
+               WHERE id NOT IN (
+                   SELECT id FROM trusted_sync_devices 
+                   ORDER BY last_connected DESC LIMIT 5
+               )"""
+        )
+        self.conn.commit()
+
+    def get_trusted_device(self, device_id: str) -> dict | None:
+        cur = self.conn.execute(
+            "SELECT * FROM trusted_sync_devices WHERE device_id = ?", (device_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def list_trusted_devices(self) -> list[dict]:
+        cur = self.conn.execute("SELECT * FROM trusted_sync_devices ORDER BY last_connected DESC")
+        return [dict(row) for row in cur.fetchall()]
+
+    def update_device_connection(self, device_id: str):
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE trusted_sync_devices SET last_connected = ? WHERE device_id = ?",
+            (now, device_id)
+        )
         self.conn.commit()

@@ -235,9 +235,20 @@ def get_backup_metadata(file_path: str) -> dict | None:
     """Abre el binario y devuelve el paquete interno (incluye la pregunta desofuscada)."""
     try:
         with open(file_path, "rb") as f:
-            o_salt = f.read(SALT_SIZE)
-            o_iv = f.read(IV_SIZE)
-            o_payload = f.read()
+            full_data = f.read()
+        return get_backup_metadata_from_bytes(full_data)
+    except Exception:
+        return None
+
+def get_backup_metadata_from_bytes(data: bytes) -> dict | None:
+    """Procesa un contenido binario (.vk) y devuelve el paquete interno."""
+    try:
+        if len(data) < SALT_SIZE + IV_SIZE:
+            return None
+            
+        o_salt = data[:SALT_SIZE]
+        o_iv = data[SALT_SIZE:SALT_SIZE+IV_SIZE]
+        o_payload = data[SALT_SIZE+IV_SIZE:]
             
         o_raw = decrypt_bytes(o_salt, o_iv, o_payload, APP_FIXED_KEY)
         if not o_raw: 
