@@ -12,11 +12,12 @@ from utils.logging_config import register_error
 class PasswordsView:
     """Lista de contraseñas de una categoría."""
 
-    def __init__(self, page: ft.Page, db_manager, auth_manager,
+    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge_server,
                  category: dict, on_back: callable, on_refresh: callable):
         self.page = page
         self.db = db_manager
         self.auth = auth_manager
+        self.bridge_server = bridge_server
         self.category = category
         self.on_back = on_back
         self.on_refresh = on_refresh
@@ -37,6 +38,7 @@ class PasswordsView:
                 on_delete=self.delete_password,
                 on_favorite=self.toggle_favorite,
                 on_open_url=self.open_url,
+                on_push_mobile=self.open_push_menu,
             )
             cards.append(card)
 
@@ -241,4 +243,46 @@ class PasswordsView:
         )
         self.page.controls.clear()
         self.page.add(form.build())
+        self.page.update()
+
+    def show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg, color=ft.Colors.WHITE), bgcolor="#333333")
+        self.page.snack_bar.open = True
+        self.page.update()
+
+    def open_push_menu(self, pw_id):
+        """Abre un diálogo para elegir qué enviar al móvil."""
+        if not self.bridge_server.is_running:
+            self.show_snackbar("El Puente KeyVault no está activo. Inícialo en Ajustes.")
+            return
+
+        pw = self.db.get_password_by_id(pw_id)
+        if not pw: return
+
+        def send(field_name):
+            try:
+                val_enc = pw.get(field_name)
+                if val_enc:
+                    from security.crypto import decrypt
+                    val = decrypt(val_enc, self.auth.key)
+                    self.bridge_server.push_clipboard(val)
+                    self.show_snackbar(f"✅ {'Usuario' if field_name == 'username' else 'Clave'} enviado al móvil.")
+                dialog.open = False
+                self.page.update()
+            except Exception as ex:
+                register_error("Error in clipboard push", ex)
+                self.show_snackbar("❌ Error al enviar.")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Enviar al móvil", size=16, weight=ft.FontWeight.BOLD),
+            content=ft.Text("¿Qué dato deseas copiar?", size=14),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Usuario", on_click=lambda _: send("username")),
+                ft.TextButton("Clave", on_click=lambda _: send("password")),
+                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, "open", False) or self.page.update()),
+            ]
+        )
+        self.page.overlay.append(dialog)
+        dialog.open = True
         self.page.update()

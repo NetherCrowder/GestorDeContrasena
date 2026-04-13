@@ -16,19 +16,46 @@ import random
 from icecream import ic
 from utils.logging_config import register_error
 
-
 class DashboardView:
     """Pantalla principal del gestor de contraseñas."""
 
-    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge_client,
+    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge,
                  on_navigate: callable, on_logout: callable):
         self.page = page
         self.db = db_manager
         self.auth = auth_manager
-        self.bridge_client = bridge_client
+        self.bridge = bridge
         self.on_navigate = on_navigate
         self.on_logout = on_logout
         self.current_tab = 0
+        
+        # Estado de Sincronización (Control Visual)
+        self.sync_chip = ft.Chip(
+            label=ft.Text("Desc.", size=11, color=ft.Colors.WHITE70),
+            leading=ft.Icon(ft.Icons.SYNC_DISABLED, size=16, color=ft.Colors.RED_400),
+            bgcolor=ft.Colors.WHITE10,
+            on_click=lambda _: self.on_navigate("sync_client" if self.page.is_mobile else "sync_host")
+        )
+        
+        # Suscribir listeners de sincronización si el bridge existe
+        if self.bridge:
+            if self.page.is_mobile:
+                # Comportamiento del Móvil
+                self.bridge.on_status_change = self._update_sync_ui
+                
+                # Al recibir bóveda nueva, procesar e importar
+                def _wrap_vault(v):
+                    # Usar la lógica de importación existente en SyncClientView (vía helper o instancia temporal)
+                    from views.sync_client_view import SyncClientView
+                    tmp = SyncClientView(self.page, self.db, self.auth, self.bridge)
+                    tmp.import_vault_data(v)
+                    self.refresh_ui()
+
+                self.bridge.on_vault = _wrap_vault
+                self._update_sync_ui("online" if self.bridge.connected else "offline")
+            else:
+                # Comportamiento del PC (Host)
+                pass
 
     def build(self) -> ft.Container:
         categories = self.db.get_all_categories()
@@ -66,6 +93,7 @@ class DashboardView:
                 on_delete=self.delete_password,
                 on_favorite=self.toggle_favorite,
                 on_open_url=self.open_url,
+                on_push_mobile=self.open_push_menu,
             )
             fav_cards.append(card)
 
@@ -80,10 +108,15 @@ class DashboardView:
                     [
                         ft.Column(
                             [
-                                ft.Text("KeyVault", size=24, weight=ft.FontWeight.W_700,
-                                        color=ft.Colors.WHITE),
-                                ft.Text(f"{total} contraseñas guardadas", size=13,
-                                        color=ft.Colors.WHITE54),
+                                ft.Row(
+                                    [
+                                        ft.Text("KeyVault", size=24, weight=ft.FontWeight.W_700, color=ft.Colors.WHITE),
+                                        ft.Container(width=10),
+                                        self.sync_chip
+                                    ],
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                ),
+                                ft.Text(f"{total} contraseñas guardadas", size=13, color=ft.Colors.WHITE54),
                             ],
                             expand=True,
                             spacing=2,
@@ -166,9 +199,10 @@ class DashboardView:
                     self.start_import,
                 ),
                 self.settings_card(
-                    ft.Icons.PHONELINK_LOCK, "Vincular PC",
-                    "Conectar con dispositivo de escritorio",
-                    self.open_sync_client,
+                    ft.Icons.PHONELINK_LOCK if getattr(self.page, "is_mobile", False) else ft.Icons.CELL_WIFI,
+                    "Vincular PC" if getattr(self.page, "is_mobile", False) else "Puente KeyVault",
+                    "Conectar con dispositivo de escritorio" if getattr(self.page, "is_mobile", False) else "Conectar con dispositivo móvil",
+                    self.open_sync_client if getattr(self.page, "is_mobile", False) else self.open_sync_host,
                 ),
                 ft.Container(height=20),
                 ft.ElevatedButton(
@@ -304,6 +338,7 @@ class DashboardView:
                 on_delete=self.delete_password,
                 on_favorite=self.toggle_favorite,
                 on_open_url=self.open_url,
+                on_push_mobile=self.open_push_menu,
             )
             self.search_results.controls.append(card)
 
@@ -809,3 +844,70 @@ class DashboardView:
 
     def open_sync_client(self, e=None):
         self.on_navigate("sync_client")
+
+    def open_sync_host(self, e=None):
+        self.on_navigate("sync_host")
+
+    def open_push_menu(self, pw_id):
+        """Abre un diálogo para elegir qué enviar al móvil."""
+        # Solo funciona si el bridge actual es un servidor y está corriendo
+        if not hasattr(self.bridge, "is_running") or not self.bridge.is_running:
+            self.show_snackbar("El Puente KeyVault no está activo o no está disponible en este dispositivo.")
+            return
+
+        pw = self.db.get_password_by_id(pw_id)
+        if not pw: return
+
+        def send(field_name):
+            try:
+                val_enc = pw.get(field_name)
+                if val_enc:
+                    from security.crypto import decrypt
+                    val = decrypt(val_enc, self.auth.key)
+                    self.bridge.push_clipboard(val)
+                    self.show_snackbar(f"✅ {'Usuario' if field_name == 'username' else 'Clave'} enviado al móvil.")
+                dialog.open = False
+                self.page.update()
+            except Exception as ex:
+                register_error("Error in clipboard push", ex)
+                self.show_snackbar("❌ Error al enviar.")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Enviar al dispositivo vinculado", size=16, weight=ft.FontWeight.BOLD),
+            content=ft.Text("¿Qué dato deseas copiar en el portapapeles de tu móvil?", size=14),
+            bgcolor="#1e2a3a",
+            actions=[
+                ft.TextButton("Enviar Usuario", on_click=lambda _: send("username")),
+                ft.TextButton("Enviar Clave", on_click=lambda _: send("password")),
+                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, "open", False) or self.page.update()),
+            ]
+        )
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _update_sync_ui(self, status: str):
+        """Actualiza el indicador visual de conexión."""
+        if not hasattr(self, "sync_chip"): return
+        if status == "online":
+            self.sync_chip.label.value = "Sinc."
+            self.sync_chip.leading.icon = ft.Icons.SYNC
+            self.sync_chip.leading.color = ft.Colors.GREEN_400
+        else:
+            self.sync_chip.label.value = "Desc."
+            self.sync_chip.leading.icon = ft.Icons.SYNC_DISABLED
+            self.sync_chip.leading.color = ft.Colors.RED_400
+        
+        try: self.page.update()
+        except: pass
+
+    def refresh_ui(self):
+        """Refresca completamente los datos de la vista actual."""
+        ic("Dashboard: Refreshing UI due to sync update")
+        # Forzar reconstrucción de la vista actual
+        self.on_navigate("dashboard")
+
+    def show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg))
+        self.page.snack_bar.open = True
+        self.page.update()

@@ -1,156 +1,63 @@
 """
-KeyVault — Gestor de Contraseñas Personal
-Punto de entrada de la aplicación Flet.
+Punto de entrada original de KeyVault (DEPRECADO).
+Por favor, utiliza main_windows.py o main_mobile.py.
 """
 
-import traceback
 import flet as ft
-from icecream import ic
-from utils.logging_config import setup_logging, register_error
+import sys
 
-# Inicializar logging
-setup_logging()
 def main(page: ft.Page):
-    # ------------------------------------------------------------------ #
-    #  Configuración de la página
-    # ------------------------------------------------------------------ #
-    page.title = "KeyVault — Gestor de Contraseñas"
+    print("=" * 60)
+    print(" ATENCION: EL PUNTO DE ENTRADA HA CAMBIADO ")
+    print("=" * 60)
+    print("\nEl archivo 'main.py' esta obsoleto.")
+    print("Para facilitar el desarrollo, se separaron las plataformas.\n")
+    print("-> Para ejecutar la version de ESCRITORIO (Host):")
+    print("   python main_windows.py\n")
+    print("-> Para ejecutar la version SIMULADA MOVIL (Client):")
+    print("   python main_mobile.py\n")
+    print("=" * 60)
+
+    page.title = "KeyVault — Archivo Obsoleto"
     page.bgcolor = "#0f172a"
     page.theme_mode = ft.ThemeMode.DARK
-    page.theme = ft.Theme(
-        color_scheme_seed=ft.Colors.CYAN,
-        font_family="Roboto",
-    )
-    page.padding = 0
-    page.spacing = 0
+    page.window.width = 600
+    page.window.height = 400
+    
+    async def close_app(e):
+        await page.window.destroy()
 
-    # Dimensiones para escritorio (fijo o ajustable según preferencia)
-    page.window.width = 1000  # Aumentamos para escritorio
-    page.window.height = 800
-    page.window.resizable = True
-    page.window.min_width = 400
-    page.window.min_height = 600
-
-    try:
-        # ------------------------------------------------------------------ #
-        #  Inicializar servicios
-        # ------------------------------------------------------------------ #
-        # Importaciones locales diferidas para evitar crasheos silenciosos por librerías
-        from database.db_manager import DatabaseManager
-        from security.auth import AuthManager
-        from views.login_view import LoginView
-        from views.dashboard_view import DashboardView
-        from views.passwords_view import PasswordsView
-        from views.change_password import ChangePasswordView
-
-        db = DatabaseManager()
-        db.connect()
-        auth = AuthManager(db)
-
-        from utils.sync_service import BridgeClient
-        bridge_client = BridgeClient()
-
-        # ------------------------------------------------------------------ #
-        #  Navegación
-        # ------------------------------------------------------------------ #
-        def navigate(view_name: str, **kwargs):
-            """Router central de la aplicación."""
-            page.controls.clear()
-            page.overlay.clear()
-
-            if view_name == "login":
-                login_view = LoginView(page, auth, on_login_success=lambda: post_login())
-                page.add(login_view.build())
-
-            elif view_name == "dashboard":
-                dashboard = DashboardView(
-                    page, db, auth, bridge_client,
-                    on_navigate=lambda v, **kw: navigate(v, **kw),
-                    on_logout=lambda: logout(),
-                )
-                page.add(dashboard.build())
-
-            elif view_name == "sync_host":
-                from views.sync_host_view import SyncHostView
-                from utils.sync_service import BridgeServer
-                # Nota: En móvil usamos un BridgeServer genérico para pruebas o hotspot
-                bridge_server = BridgeServer() 
-                sync_view = SyncHostView(
-                    page, db, auth, bridge_server,
-                    on_back=lambda: navigate("dashboard")
-                )
-                page.add(sync_view.build())
-
-            elif view_name == "sync_client":
-                from views.sync_client_view import SyncClientView
-                sync_view = SyncClientView(
-                    page, db, auth, bridge_client,
-                    on_back=lambda: navigate("dashboard")
-                )
-                page.add(sync_view.build())
-
-            elif view_name == "passwords":
-                category_id = kwargs.get("category_id", 8)
-                categories = db.get_all_categories()
-                category = next((c for c in categories if c["id"] == category_id), categories[-1])
-                pw_view = PasswordsView(
-                    page, db, auth,
-                    category=category,
-                    on_back=lambda: navigate("dashboard"),
-                    on_refresh=lambda: navigate("passwords", category_id=category_id),
-                )
-                page.add(pw_view.build())
-
-            elif view_name == "change_password":
-                is_forced = kwargs.get("is_forced", False)
-                change_view = ChangePasswordView(
-                    page, auth,
-                    is_forced=is_forced,
-                    on_complete=lambda: navigate("dashboard"),
-                )
-                page.add(change_view.build())
-
-            page.update()
-
-        def post_login():
-            """Acciones post-login: verificar rotación y navegar."""
-            if auth.needs_rotation():
-                navigate("change_password", is_forced=True)
-            else:
-                navigate("dashboard")
-
-        def logout():
-            """Cerrar sesión."""
-            auth.lock()
-            navigate("login")
-
-        # ------------------------------------------------------------------ #
-        #  Iniciar en la pantalla de login
-        # ------------------------------------------------------------------ #
-        navigate("login")
-
-    except Exception as e:
-        register_error("CRITICAL ERROR IN INITIALIZATION", e)
-        error_trace = traceback.format_exc()
-        ic(f"CRITICAL ERROR:\n{error_trace}")
-
-        # Mantener la UI de error para que el usuario sepa qué pasó
-        page.controls.clear()
-        page.add(
-            ft.ListView(
+    page.add(
+        ft.Container(
+            expand=True,
+            content=ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
                 controls=[
-                    ft.Text("⚠️ CRASH FATAL DE INICIALIZACIÓN", color="red", weight=ft.FontWeight.BOLD, size=20),
-                    ft.Text("La aplicación falló al arrancar. Los detalles se guardaron en errors.log.", color="white70"),
-                    ft.Text(error_trace, color="red", selectable=True, font_family="monospace", size=11)
-                ],
-                expand=True,
-                padding=20,
-                auto_scroll=True
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, size=80, color=ft.Colors.AMBER),
+                    ft.Text("ARCHIVO OBSOLETO", size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                    ft.Text(
+                        "Has ejecutado main.py, el cual ya no es el punto de entrada.\n\n"
+                        "-> Para escritorio: python main_windows.py\n"
+                        "-> Para movil: python main_mobile.py",
+                        size=16,
+                        text_align=ft.TextAlign.CENTER,
+                        color=ft.Colors.WHITE70
+                    ),
+                    ft.Container(height=20),
+                    ft.FilledButton(
+                        "Cerrar Aplicacion",
+                        icon=ft.Icons.CLOSE,
+                        style=ft.ButtonStyle(bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+                        on_click=close_app
+                    )
+                ]
             )
         )
-        page.update()
+    )
+    page.update()
 
-
-# Punto de entrada
 if __name__ == "__main__":
+    # Mostrar advertencia en consola también directamente
+    print("ATENCION: main.py esta obsoleto. Ejecutando aviso grafico...")
     ft.run(main)

@@ -188,6 +188,57 @@ def export_passwords(file_path: str, passwords: list[dict], auth_key: bytes, que
         print(f"Error crítico al exportar: {e}")
         return False, 0, 0
 
+def export_passwords_to_bytes(passwords: list[dict], auth_key: bytes, question: str, answer: str) -> bytes | None:
+    """
+    Versión de export_passwords que devuelve el contenido binario (.vk) directamente.
+    Útil para la sincronización P2P sin tocar el disco.
+    """
+    try:
+        decrypted_passwords = []
+        for pw in passwords:
+            try:
+                u_enc = pw.get("username")
+                p_enc = pw.get("password")
+                n_enc = pw.get("notes")
+                item = {
+                    "title": pw.get("title", ""),
+                    "username": decrypt_master(u_enc, auth_key) if u_enc else "",
+                    "password": decrypt_master(p_enc, auth_key) if p_enc else "",
+                    "url": pw.get("url", ""),
+                    "notes": decrypt_master(n_enc, auth_key) if n_enc else "",
+                    "category_id": pw.get("category_id", 8),
+                    "created_at": pw.get("created_at"),
+                    "updated_at": pw.get("updated_at"),
+                }
+                decrypted_passwords.append(item)
+            except: continue
+
+        # Capa 1: Cifrado con Respuesta de Seguridad
+        i_salt = os.urandom(SALT_SIZE)
+        i_key = derive_key(answer, i_salt)
+        i_iv = os.urandom(IV_SIZE)
+        raw_inner = json.dumps(decrypted_passwords, ensure_ascii=False).encode("utf-8")
+        i_counter = pyaes.Counter(initial_value=int.from_bytes(i_iv, "big"))
+        i_aes = pyaes.AESModeOfOperationCTR(i_key, counter=i_counter)
+        i_ciphertext = i_aes.encrypt(raw_inner)
+        i_mac = hmac.new(i_key, i_iv + i_ciphertext, hashlib.sha256).digest()
+        
+        inner_package = {
+            "h_meta": base64.b64encode(question.encode()).decode(),
+            "s": base64.b64encode(i_salt).decode(),
+            "n": base64.b64encode(i_iv).decode(),
+            "t": base64.b64encode(i_mac).decode(),
+            "d": base64.b64encode(i_ciphertext).decode()
+        }
+        
+        # Capa 2: Bloqueo Binario
+        o_raw = json.dumps(inner_package).encode("utf-8")
+        o_salt, o_iv, o_payload = encrypt_bytes(o_raw, APP_FIXED_KEY)
+        return o_salt + o_iv + o_payload
+    except:
+        return None
+
+
 def get_backup_metadata(file_path: str) -> dict | None:
     """Abre el binario y devuelve el paquete interno (incluye la pregunta desofuscada)."""
     try:
