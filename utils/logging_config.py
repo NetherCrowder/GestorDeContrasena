@@ -12,7 +12,13 @@ def setup_logging():
     # Usar AppData/Local/KeyVault para los logs
     import os
     from pathlib import Path
-    base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+    
+    app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+    if app_storage:
+        base_dir = Path(app_storage)
+    else:
+        base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+        
     base_dir.mkdir(parents=True, exist_ok=True)
     log_file = base_dir / "errors.log"
     
