@@ -59,6 +59,8 @@ class DatabaseManager:
             self.conn.executescript(SCHEMA_SQL)
             ic("DATABASE CONNECT: Migrating temp passwords...")
             self.migrate_temp_passwords()
+            ic("DATABASE CONNECT: Migrating sync_id...")
+            self.migrate_sync_id()
             ic("DATABASE CONNECT: Seeding categories...")
             self.seed_categories()
             
@@ -81,6 +83,21 @@ class DatabaseManager:
             self.conn.execute("ALTER TABLE temp_passwords ADD COLUMN name TEXT DEFAULT 'Sin nombre'")
         except sqlite3.OperationalError:
             # La columna ya existe
+            pass
+
+    def migrate_sync_id(self):
+        """Añade la columna 'sync_id' a passwords si no existe y le asigna UUIDs."""
+        import uuid
+        try:
+            self.conn.execute("ALTER TABLE passwords ADD COLUMN sync_id TEXT UNIQUE")
+            # Asignar UUIDs a los registros existentes
+            cur = self.conn.execute("SELECT id FROM passwords WHERE sync_id IS NULL")
+            rows = cur.fetchall()
+            for row in rows:
+                self.conn.execute("UPDATE passwords SET sync_id = ? WHERE id = ?", (uuid.uuid4().hex, row["id"]))
+            self.conn.commit()
+            ic("DATABASE: Migrated passwords to include sync_id.")
+        except sqlite3.OperationalError:
             pass
 
     def close(self):
@@ -112,16 +129,20 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
     def add_password(self, title: str, username: bytes, password: bytes,
                      url: str = "", category_id: int = 8, notes: bytes = b"",
-                     is_favorite: int = 0, password_rules: dict | None = None) -> int:
+                     is_favorite: int = 0, password_rules: dict | None = None,
+                     sync_id: str | None = None) -> int:
         """Crea un registro de contraseña. Devuelve el ID insertado."""
+        import uuid
         now = datetime.now().isoformat()
         rules_json = json.dumps(password_rules or {})
+        s_id = sync_id or uuid.uuid4().hex
+        
         cur = self.conn.execute(
             """INSERT INTO passwords
-               (title, username, password, url, category_id, notes,
+               (sync_id, title, username, password, url, category_id, notes,
                 is_favorite, password_rules, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (title, username, password, url, category_id, notes,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (s_id, title, username, password, url, category_id, notes,
              is_favorite, rules_json, now, now),
         )
         self.conn.commit()
@@ -223,21 +244,16 @@ class DatabaseManager:
         )
         return {row["category_id"]: row["cnt"] for row in cur.fetchall()}
 
-    def import_from_list(self, data_list: list[dict], master_key: bytes) -> int:
-        """Importación inteligente desde una lista de diccionarios (Sincronización)."""
+    def import_from_list(self, data_list: list[dict], master_key: bytes) -> tuple[int, int, int]:
+        """Importación inteligente bidireccional (Sincronización PC-Móvil) usando UUID (sync_id) y timestamps."""
         from security.crypto import encrypt, decrypt
         
         current_passwords = self.get_all_passwords()
-        # Crear mapa de existencia: (título, usuario_plano, categoría) -> id
-        existing_map = {}
-        for lp in current_passwords:
-            u_plain = ""
-            try:
-                u_plain = decrypt(lp["username"], master_key) if lp["username"] else ""
-            except: pass
-            existing_map[(lp["title"], u_plain, lp["category_id"])] = lp["id"]
+        
+        inserted = 0
+        updated = 0
+        skipped = 0
 
-        count = 0
         all_cats = self.get_all_categories()
         valid_ids = [c["id"] for c in all_cats]
 
@@ -250,34 +266,66 @@ class DatabaseManager:
             p_plain = item.get("password", "")
             n_plain = item.get("notes", "")
             url = item.get("url", "")
+            sync_id = item.get("sync_id", "")
+            remote_ts = item.get("updated_at") or ""
+            is_fav = item.get("is_favorite", 0)
+
+            # 1. Buscar coincidencia local
+            match = None
+            if sync_id:
+                for lp in current_passwords:
+                    if lp.get("sync_id") == sync_id:
+                        match = lp
+                        break
+            
+            # Fallback a título y usuario
+            if not match:
+                for lp in current_passwords:
+                    try:
+                        lp_user = decrypt(lp["username"], master_key) if lp["username"] else ""
+                    except: lp_user = ""
+                    if lp.get("title") == title and lp_user == u_plain and lp.get("category_id") == cat_id:
+                        match = lp
+                        break
 
             enc_user = encrypt(u_plain, master_key)
             enc_pass = encrypt(p_plain, master_key)
             enc_note = encrypt(n_plain, master_key) if n_plain else b""
 
-            key = (title, u_plain, cat_id)
-            if key in existing_map:
-                pw_id = existing_map[key]
-                self.update_password(
-                    pw_id,
-                    password=enc_pass,
-                    notes=enc_note,
-                    url=url
-                )
-            else:
+            local_ts = (match.get("updated_at") or "") if match else ""
+
+            if match is None:
                 self.add_password(
-                    title=title,
-                    username=enc_user,
-                    password=enc_pass,
-                    url=url,
-                    notes=enc_note,
-                    category_id=cat_id
+                    title=title, username=enc_user, password=enc_pass,
+                    url=url, notes=enc_note, category_id=cat_id,
+                    is_favorite=is_fav, sync_id=sync_id or None
                 )
-            count += 1
-        
+                
+                # El record recién insertado usará now() local, así que actualizamos
+                # explícitamente su updated_at al valor remoto.
+                inserted_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                if remote_ts:
+                    self.conn.execute("UPDATE passwords SET updated_at=? WHERE id=?", (remote_ts, inserted_id))
+                
+                inserted += 1
+            elif remote_ts > local_ts:
+                pw_id = match["id"]
+                self.conn.execute(
+                    """UPDATE passwords 
+                       SET title=?, username=?, password=?, url=?, notes=?, 
+                           category_id=?, is_favorite=?, updated_at=?
+                       WHERE id=?""",
+                    (title, enc_user, enc_pass, url, enc_note, 
+                     cat_id, is_fav, remote_ts, pw_id)
+                )
+                updated += 1
+            else:
+                skipped += 1
+                
         self.conn.commit()
-        self._increment_version()
-        return count
+        if inserted > 0 or updated > 0:
+            self._increment_version()
+        return inserted, updated, skipped
 
     # ------------------------------------------------------------------ #
     #  CRUD - Categorías
@@ -288,7 +336,7 @@ class DatabaseManager:
 
     def add_category(self, name: str, icon: str = "MORE_HORIZ",
                      color: str = "#607D8B") -> int:
-        self.conn.execute(
+        cur = self.conn.execute(
             "INSERT INTO categories (name, icon, color, is_custom) VALUES (?, ?, ?, 1)",
             (name, icon, color),
         )

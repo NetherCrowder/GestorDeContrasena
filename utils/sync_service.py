@@ -101,10 +101,8 @@ class BridgeServer:
         self.thread = None
         self.app = FastAPI(title="KeyVault Sync Server")
         
-        # Credenciales de sesión
-        self.session_token = None
-        self.session_key = None
-        self.encryptor = None
+        # Gestión de sesiones (Multi-dispositivo)
+        self.sessions = {}            # token -> {"device_id": str, "encryptor": SessionEncryptor}
         self.vault_provider = None
         
         # Sistema de PIN rotativo
@@ -127,7 +125,32 @@ class BridgeServer:
         # Callbacks de UI
         self.on_pin_rotated = None    # callback() -> None para actualizar UI
         
+        # Persistencia de dispositivos
+        self._devices_file = os.path.join(
+            os.getenv("LOCALAPPDATA", ""), "KeyVault", "bridge_devices.json"
+        ) if os.name == "nt" else "bridge_devices.json"
+        self._load_trusted_devices()
+
         self._setup_routes()
+        
+    def _load_trusted_devices(self):
+        """Carga los tokens de confianza guardados desde el disco."""
+        try:
+            if os.path.exists(self._devices_file):
+                with open(self._devices_file, "r") as f:
+                    self.trusted_devices = json.load(f)
+                ic(f"[{len(self.trusted_devices)}] Dispositivos de confianza cargados.")
+        except Exception as e:
+            ic(f"Error cargando dispositivos de confianza: {e}")
+
+    def _save_trusted_devices(self):
+        """Guarda los tokens de confianza al disco."""
+        try:
+            os.makedirs(os.path.dirname(self._devices_file), exist_ok=True)
+            with open(self._devices_file, "w") as f:
+                json.dump(self.trusted_devices, f)
+        except Exception as e:
+            ic(f"Error guardando dispositivos de confianza: {e}")
     
     # ------------------------------------------------------------------ #
     #  PIN Management
@@ -195,6 +218,7 @@ class BridgeServer:
             "last_seen": time.time(),
             "device_name": name
         }
+        self._save_trusted_devices()
         return trust_token
 
     # ------------------------------------------------------------------ #
@@ -213,18 +237,25 @@ class BridgeServer:
         @self.app.middleware("http")
         async def auth_middleware(request: Request, call_next):
             # Rutas publicas (no requieren token de sesión)
+            path = request.url.path
             public_paths = ["/", "/auth/step1", "/auth/step2", "/auth/trust", "/ping"]
-            if request.url.path in public_paths:
+            if path in public_paths:
                 return await call_next(request)
             
             token = request.query_params.get("token")
-            if not token or token != self.session_token:
+            if not token or token not in self.sessions:
                 return JSONResponse(status_code=403, content={"error": "unauthorized"})
             
-            # Actualizar last_seen del cliente
-            device_id = request.query_params.get("device_id")
+            # Asociar sesión a la petición
+            session = self.sessions[token]
+            request.state.session = session
+            
+            # Actualizar actividad
+            device_id = session.get("device_id")
             if device_id and device_id in self.connected_clients:
                 self.connected_clients[device_id]["last_seen"] = time.time()
+                if path in ["/sync", "/sync/upload"]:
+                    self.connected_clients[device_id]["last_sync"] = time.time()
             
             return await call_next(request)
 
@@ -267,7 +298,7 @@ class BridgeServer:
             
             # Autenticación completa: generar credenciales de sesión
             session_key = os.urandom(32)
-            session_token = base64.b64encode(os.urandom(12)).decode().replace("=", "")
+            session_token = os.urandom(16).hex()
             
             # Registrar dispositivo y obtener trust_token
             trust_token = self._register_trusted_device(device_id, client_ip, device_name)
@@ -285,13 +316,18 @@ class BridgeServer:
             transport_enc = SessionEncryptor(transport_key)
             encrypted_creds = transport_enc.encrypt(credentials)
             
-            # Actualizar credenciales de sesión del servidor
-            self.session_token = session_token
-            self.session_key = session_key
-            self.encryptor = SessionEncryptor(session_key)
+            # Limpiar sesiones antiguas de este mismo dispositivo
+            old_tokens = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+            for t in old_tokens: self.sessions.pop(t, None)
+
+            # Registrar nueva sesión
+            self.sessions[session_token] = {
+                "device_id": device_id,
+                "encryptor": SessionEncryptor(session_key)
+            }
             
             self.auth_events.append(("success", client_ip, time.time()))
-            ic(f"Dispositivo '{device_name}' ({device_id}) autenticado desde {client_ip}")
+            ic(f"Sesion creada para '{device_id}' desde {client_ip}")
             
             # Rotar PIN y Alpha después del éxito
             self.rotate_credentials()
@@ -312,7 +348,7 @@ class BridgeServer:
             
             # Emitir nuevas credenciales de sesión
             session_key = os.urandom(32)
-            session_token = base64.b64encode(os.urandom(12)).decode().replace("=", "")
+            session_token = os.urandom(16).hex()
             
             credentials = json.dumps({
                 "t": session_token,
@@ -324,44 +360,72 @@ class BridgeServer:
             transport_enc = SessionEncryptor(transport_key)
             encrypted_creds = transport_enc.encrypt(credentials)
             
+            # Limpiar sesiones antiguas de este mismo dispositivo (Opcional, pero recomendado)
+            old_tokens = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+            for t in old_tokens: self.sessions.pop(t, None)
+
             # Actualizar sesión
-            self.session_token = session_token
-            self.session_key = session_key
-            self.encryptor = SessionEncryptor(session_key)
+            self.sessions[session_token] = {
+                "device_id": device_id,
+                "encryptor": SessionEncryptor(session_key)
+            }
             
             if device_id in self.connected_clients:
                 self.connected_clients[device_id]["last_seen"] = time.time()
                 self.connected_clients[device_id]["ip"] = client_ip
+            else:
+                # Recuperar de dispositivos de confianza si es que el servidor se reinició
+                self.connected_clients[device_id] = {
+                    "ip": client_ip,
+                    "last_seen": time.time(),
+                    "device_name": "Dispositivo Vinculado"
+                }
             
             ic(f"Reconexion silenciosa de {device_id} desde {client_ip}")
             return JSONResponse({"data": encrypted_creds})
 
         # ----- Sincronización: descargar bóveda -----
         @self.app.get("/sync")
-        async def sync_vault():
+        async def sync_vault(request: Request):
             fresh_vault = self.vault_provider() if self.vault_provider else None
-            if not fresh_vault:
+            if fresh_vault is None:
                 raise HTTPException(status_code=404, detail="Boveda no preparada")
-            if not self.encryptor:
-                raise HTTPException(status_code=503, detail="Sin sesion activa")
-            encrypted = self.encryptor.encrypt(fresh_vault)
+            
+            session = request.state.session
+            encryptor = session["encryptor"]
+            
+            # fresh_vault ya debería ser un string JSON (desde backup.py)
+            encrypted = encryptor.encrypt(str(fresh_vault))
             return Response(content=encrypted.encode(), media_type="application/octet-stream")
 
         # ----- Sincronización: subir bóveda desde móvil -----
         @self.app.post("/sync/upload")
         async def sync_upload(request: Request):
             body = await request.body()
+            session = request.state.session
+            encryptor = session["encryptor"]
+            
             try:
                 payload = json.loads(body.decode())
                 encrypted = payload.get("data", "")
-                decrypted = self.encryptor.decrypt(encrypted) if self.encryptor else None
+                decrypted = encryptor.decrypt(encrypted)
                 if decrypted and self.on_vault_received:
-                    data_list = json.loads(decrypted)
+                    incoming = json.loads(decrypted)
+                    # Soportar formato bridge_v1 o lista plana
+                    if isinstance(incoming, dict) and incoming.get("fmt") == "bridge_v1":
+                        data_list = incoming.get("data", [])
+                    elif isinstance(incoming, list):
+                        data_list = incoming
+                    else:
+                        raise ValueError("Formato de datos no soportado")
+                        
                     self.on_vault_received(data_list)
                     return JSONResponse({"status": "ok"})
             except Exception as e:
-                ic(f"Error en sync/upload: {e}")
-            raise HTTPException(status_code=400, detail="Datos invalidos")
+                import traceback
+                print(f"Error en sync/upload: {e}")
+                traceback.print_exc()
+                raise HTTPException(status_code=400, detail=f"Error procesando datos: {e}")
 
         # ----- Portapapeles: Long Polling -----
         @self.app.get("/clipboard/poll")
@@ -376,9 +440,11 @@ class BridgeServer:
                     return Response(status_code=204)
                 try:
                     msg = q.get_nowait()
-                    if self.encryptor:
-                        encrypted_msg = self.encryptor.encrypt(msg)
-                        return JSONResponse({"data": encrypted_msg})
+                    session = request.state.session
+                    encryptor = session["encryptor"]
+                    
+                    encrypted_msg = encryptor.encrypt(msg)
+                    return JSONResponse({"data": encrypted_msg})
                 except queue.Empty:
                     await asyncio.sleep(0.5)
             
@@ -472,16 +538,24 @@ class BridgeServer:
     # --- Grupo B: Control y Seguridad ---
     
     def revoke_device(self, device_id: str):
-        """Revoca el acceso de un dispositivo específico."""
+        """Elimina el dispositivo de confianza y cierra sus sesiones activas."""
         self.trusted_devices.pop(device_id, None)
         self.connected_clients.pop(device_id, None)
+        
+        # Eliminar sesiones de este dispositivo
+        tokens_to_remove = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+        for t in tokens_to_remove:
+            self.sessions.pop(t, None)
+            
+        self._save_trusted_devices()
         ic(f"Dispositivo revocado: {device_id}")
 
     def revoke_all_devices(self):
-        """Revoca el acceso a todos los dispositivos conectados."""
+        """Revoca todos los dispositivos y limpia todas las sesiones."""
         self.trusted_devices.clear()
         self.connected_clients.clear()
-        self.client_queues.clear()
+        self.sessions.clear()
+        self._save_trusted_devices()
         ic("Todos los dispositivos han sido revocados.")
 
     def lock_device(self, device_id: str) -> bool:

@@ -204,10 +204,10 @@ def start_clipboard_thread(base_url: str, token: str, enc: SessionEncryptor):
                             print(f"  Valor: {decrypted}")
                             print(f"  {'─'*50}")
                             print("  > ", end="", flush=True)
-            except Exception:
+            except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors >= 5:
-                    print("\n  [!] Perdí conexión con el servidor. Reintentando...\n  > ",
+                    print(f"\n  [!] Perdí conexión con el servidor. Reintentando... ({e})\n  > ",
                           end="", flush=True)
                     time.sleep(5)
                 else:
@@ -268,26 +268,73 @@ def start_live_session(pairing: dict):
 
         elif cmd == "vault":
             try:
+                # El token ya es hexadecimal, por lo que no suelen requerir quoting complejo
                 with urllib.request.urlopen(
                     f"{base_url}/sync?token={token}", timeout=10
                 ) as r:
-                    decrypted = enc.decrypt(r.read().decode())
+                    raw_content = r.read().decode()
+                    if not raw_content:
+                        print("  [✗] El servidor devolvió una respuesta vacía.")
+                        continue
+                        
+                    decrypted = enc.decrypt(raw_content)
                     if decrypted:
-                        vault = json.loads(decrypted)
-                        print(f"\n  📦 Bóveda recibida: {len(vault)} contraseña(s)")
-                        for i, item in enumerate(vault[:10], 1):
-                            title = item.get("title", "?")
-                            user  = item.get("username", "—")
-                            print(f"    {i:2}. {title:<25} Usuario: {user}")
-                        if len(vault) > 10:
-                            print(f"    ... y {len(vault)-10} más.")
-                        print()
+                        try:
+                            vault = json.loads(decrypted)
+                            print(f"\n  📦 Bóveda recibida: {len(vault)} contraseña(s)")
+                            for i, item in enumerate(vault[:10], 1):
+                                title = item.get("title", "?")
+                                user  = item.get("username", "—")
+                                print(f"    {i:2}. {title:<25} Usuario: {user}")
+                            if len(vault) > 10:
+                                print(f"    ... y {len(vault)-10} más.")
+                            print()
+                        except json.JSONDecodeError:
+                            print("  [✗] Error de formato: Los datos descifrados no son un JSON válido.")
+                            print(f"      Contenido: {decrypted[:50]}...")
                     else:
-                        print("  [✗] No se pudo descifrar la bóveda.")
+                        print("  [✗] Error de cifrado: No se pudo descifrar la respuesta. ¿Token o clave desincronizados?")
             except urllib.error.HTTPError as e:
                 print(f"  [✗] Error HTTP {e.code} — ¿sesión expirada?")
             except Exception as e:
-                print(f"  [✗] Error: {e}")
+                print(f"  [✗] Error inesperado en vault: {e}")
+
+        elif cmd == "upload":
+            try:
+                import datetime
+                import uuid
+                now = datetime.datetime.now().isoformat()
+                fake_vault = [
+                    {
+                        "sync_id": uuid.uuid4().hex,
+                        "title": "Pass Simulada del Móvil",
+                        "username": "usermovil",
+                        "password": "passmovil_123",
+                        "url": "https://m.ejemplo.com",
+                        "notes": "Generada desde test_client.py",
+                        "category_id": 8,
+                        "is_favorite": 1,
+                        "created_at": now,
+                        "updated_at": now
+                    }
+                ]
+                
+                # Formato bridge_v1 requerido por backup.py en la PC
+                payload_dict = {"fmt": "bridge_v1", "data": fake_vault}
+                payload_str = json.dumps(payload_dict)
+                encrypted = enc.encrypt(payload_str)
+                req_data = json.dumps({"data": encrypted}).encode()
+                
+                req = urllib.request.Request(
+                    f"{base_url}/sync/upload?device_id={pairing['device_id']}&token={urllib.parse.quote(token)}",
+                    data=req_data,
+                    headers={'Content-Type': 'application/json'}
+                )
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    if r.status == 200:
+                        print("  [✓] Bóveda enviada exitosamente al PC. Revisa el Dashboard de Windows.")
+            except Exception as e:
+                print(f"  [✗] Error subiendo: {e}")
 
         elif cmd == "status":
             try:

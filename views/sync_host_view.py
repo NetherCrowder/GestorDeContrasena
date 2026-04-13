@@ -19,6 +19,7 @@ class SyncHostView:
         self.on_back = on_back
 
         self.is_active = self.server.is_running
+        self.excluded_categories = set()
 
         # --- Componentes de estado ---
         self.status_dot = ft.Icon(ft.Icons.CIRCLE, color=ft.Colors.RED_400, size=14)
@@ -54,6 +55,12 @@ class SyncHostView:
             icon=ft.Icons.ROUTER,
             style=ft.ButtonStyle(bgcolor=ft.Colors.CYAN_700, color=ft.Colors.WHITE),
             on_click=self.toggle_bridge
+        )
+
+        self.filter_btn = ft.IconButton(
+            ft.Icons.FILTER_LIST, tooltip="Filtro de Sincronización",
+            icon_color=ft.Colors.WHITE54,
+            on_click=self.open_filter_dialog
         )
 
         # --- Controles de Grupo B ---
@@ -155,7 +162,7 @@ class SyncHostView:
                 ft.Container(height=5),
                 pin_card,
                 ft.Container(height=10),
-                self.toggle_btn,
+                ft.Row([self.toggle_btn, self.filter_btn], alignment=ft.MainAxisAlignment.CENTER),
                 ft.Container(height=16),
                 clients_card,
             ],
@@ -194,12 +201,16 @@ class SyncHostView:
             from utils.backup import export_passwords_bridge
 
             def vault_provider():
-                return export_passwords_bridge(self.db.get_all_passwords(), self.auth.key)
+                all_pw = self.db.get_all_passwords()
+                if self.excluded_categories:
+                    all_pw = [pw for pw in all_pw if pw.get("category_id") not in self.excluded_categories]
+                return export_passwords_bridge(all_pw, self.auth.key)
 
             config = self.server.start(vault_provider)
 
-            # Registrar callback para rotación de PIN
+            # Registrar callbacks
             self.server.on_pin_rotated = self._on_pin_updated
+            self.server.on_vault_received = self._handle_vault_received
 
             self.is_active = True
             self._update_status_ui(active=True, config=config)
@@ -216,6 +227,7 @@ class SyncHostView:
     def _stop_bridge(self):
         self.server.stop()
         self.server.on_pin_rotated = None
+        self.server.on_vault_received = None
         self.is_active = False
         self._update_status_ui(active=False)
         self.page.update()
@@ -300,16 +312,25 @@ class SyncHostView:
                     self.clients_list.controls = []
                     for did, info in active[:MAX_CLIENTS]:
                         ago = int(now - info.get("last_seen", now))
+                        
+                        # C2: Indicador de última sincronización
+                        last_sync = info.get("last_sync")
+                        if last_sync:
+                            ls_secs = int(now - last_sync)
+                            if ls_secs < 60: ls_str = f"{ls_secs}s"
+                            elif ls_secs < 3600: ls_str = f"{ls_secs//60}m"
+                            else: ls_str = f"{ls_secs//3600}h"
+                            sync_info = f" | Sync: hace {ls_str}"
+                        else:
+                            sync_info = " | Sync: Nunca"
+
                         self.clients_list.controls.append(
                             ft.Row([
                                 ft.Icon(ft.Icons.PHONELINK_LOCK, size=16, color=ft.Colors.GREEN_400),
-                                ft.Text(
-                                    f"{info.get('device_name', 'Móvil')} ({info.get('ip', '?')})",
-                                    size=13, color=ft.Colors.WHITE70, expand=True
-                                ),
-                                ft.Text(
-                                    f"Hace {ago}s", size=11, color=ft.Colors.WHITE38
-                                ),
+                                ft.Column([
+                                    ft.Text(f"{info.get('device_name', 'Móvil')}", size=13, weight=ft.FontWeight.W_500),
+                                    ft.Text(f"IP: {info.get('ip', '?')}{sync_info} • Hace {ago}s", size=10, color=ft.Colors.WHITE38),
+                                ], spacing=0, expand=True),
                                 ft.IconButton(
                                     ft.Icons.LOCK_OUTLINE, icon_size=14, tooltip="Bloqueo Remoto",
                                     icon_color=ft.Colors.AMBER_400,
@@ -405,11 +426,77 @@ class SyncHostView:
         dialog.open = True
         self.page.update()
 
-    def _show_snackbar(self, msg: str):
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.BLUE_GREY_800)
+    def _show_snackbar(self, msg: str, color: str = ft.Colors.BLUE_GREY_800):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg), bgcolor=color)
         self.page.snack_bar.open = True
         self.page.update()
 
+    # ------------------------------------------------------------------ #
+    # Sincronización y Filtros
+    # ------------------------------------------------------------------ #
+    def _handle_vault_received(self, data_list: list[dict]):
+        """Llamado por BridgeServer cuando recibe un empuje completo del móvil."""
+        async def sync_worker():
+            try:
+                # La importación es síncrona, pero la envolvemos en el flujo de Flet
+                inserted, updated, skipped = self.db.import_from_list(data_list, self.auth.key)
+                # Incrementar versión para notificar por red
+                self.db._increment_version()
+                
+                # Reportar en UI
+                if inserted > 0 or updated > 0:
+                    msg = f"Sincronización entrante: {inserted} nuevos, {updated} actualizados."
+                    self._show_snackbar(msg, color=ft.Colors.GREEN_600)
+                else:
+                    self._show_snackbar("Sincronización entrante exitosa (sin cambios nuevos).", color=ft.Colors.LIGHT_BLUE_600)
+                # page.update() debe ser llamado con await si estamos en un contexto async de Flet
+                await self.page.update_async()
+            except Exception as e:
+                self._show_snackbar(f"Error importando sincronización: {e}", color=ft.Colors.RED_600)
+                await self.page.update_async()
+
+        # Lanzar la tarea asíncrona correctamente
+        self.page.run_task(sync_worker)
+
+    def open_filter_dialog(self, e):
+        """Abre un diálogo para seleccionar qué categorías compartir en el Puente."""
+        all_cats = self.db.get_all_categories()
+        checkboxes = []
+
+        def on_change(e, cid):
+            if e.control.value:
+                self.excluded_categories.discard(cid)
+            else:
+                self.excluded_categories.add(cid)
+
+        for cat in all_cats:
+            cid = cat["id"]
+            checked = cid not in self.excluded_categories
+            cb = ft.Checkbox(
+                label=cat["name"],
+                value=checked,
+                on_change=lambda e, cid=cid: on_change(e, cid),
+                fill_color=ft.Colors.CYAN_700
+            )
+            checkboxes.append(cb)
+
+        def close_dg(e):
+            d.open = False
+            self.page.update()
+            self._show_snackbar("Filtro actualizado. (Aplica a la próxima descarga desde el móvil)")
+
+        d = ft.AlertDialog(
+            title=ft.Text("Filtro de Sincronización"),
+            content=ft.Column([
+                ft.Text("Selecciona las categorías de contraseñas a exportar:", size=13, color=ft.Colors.WHITE54)
+            ] + checkboxes, scroll=ft.ScrollMode.AUTO, tight=True, height=300),
+            actions=[ft.TextButton("Listo", on_click=close_dg)],
+            actions_alignment=ft.MainAxisAlignment.END,
+            bgcolor="#1e293b"
+        )
+        self.page.overlay.append(d)
+        d.open = True
+        self.page.update()
 
 # Importar MAX_CLIENTS desde sync_service
 try:

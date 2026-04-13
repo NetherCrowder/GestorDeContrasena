@@ -6,6 +6,7 @@ Implementa el sistema de "Cerradura Binaria" (Contenido cifrado + Header bloquea
 import json
 import base64
 import os
+from icecream import ic
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -193,6 +194,7 @@ def export_passwords_to_bytes(passwords: list[dict], auth_key: bytes, question: 
                 p_enc = pw.get("password")
                 n_enc = pw.get("notes")
                 item = {
+                    "sync_id": pw.get("sync_id") or "",
                     "title": pw.get("title", ""),
                     "username": decrypt_master(u_enc, auth_key) if u_enc else "",
                     "password": decrypt_master(p_enc, auth_key) if p_enc else "",
@@ -301,6 +303,7 @@ def export_passwords_bridge(passwords: list[dict], auth_key: bytes) -> str | Non
                 p_enc = pw.get("password")
                 n_enc = pw.get("notes")
                 item = {
+                    "sync_id": pw.get("sync_id") or "",
                     "title": pw.get("title", ""),
                     "username": decrypt_master(u_enc, auth_key) if u_enc else "",
                     "password": decrypt_master(p_enc, auth_key) if p_enc else "",
@@ -315,11 +318,10 @@ def export_passwords_bridge(passwords: list[dict], auth_key: bytes) -> str | Non
             except Exception:
                 continue
 
-        raw_json = json.dumps(decrypted_list, ensure_ascii=False)
-        # Marcar formato para que el cliente distinga del formato .vk antiguo
-        payload = json.dumps({"fmt": "bridge_v1", "data": decrypted_list}, ensure_ascii=False)
-        return base64.b64encode(payload.encode("utf-8")).decode()
-    except Exception:
+        # Retornar JSON plano. El BridgeServer se encargará de cifrarlo con la SessionKey (AES-CTR)
+        return json.dumps(decrypted_list, ensure_ascii=False)
+    except Exception as e:
+        ic(f"Error en export_passwords_bridge: {e}")
         return None
 
 
@@ -356,17 +358,25 @@ def apply_bridge_vault(vault_b64: str, db, auth_key: bytes) -> tuple[int, int, i
             username_plain = item.get("username", "")
             category_id = item.get("category_id", 8)
             updated_at_remote = item.get("updated_at") or ""
+            sync_id = item.get("sync_id", "")
 
-            # Buscar coincidencia local por title + username descifrado
+            # Buscar coincidencia local por sync_id, o (title + username)
             match = None
-            for ex in all_local:
-                try:
-                    ex_username = decrypt_master(ex.get("username"), auth_key) if ex.get("username") else ""
-                except Exception:
-                    ex_username = ""
-                if ex.get("title") == title and ex_username == username_plain:
-                    match = ex
-                    break
+            if sync_id:
+                for ex in all_local:
+                    if ex.get("sync_id") == sync_id:
+                        match = ex
+                        break
+
+            if not match:
+                for ex in all_local:
+                    try:
+                        ex_username = decrypt_master(ex.get("username"), auth_key) if ex.get("username") else ""
+                    except Exception:
+                        ex_username = ""
+                    if ex.get("title") == title and ex_username == username_plain:
+                        match = ex
+                        break
 
             # Re-cifrar con la clave del móvil
             u_enc = encrypt_master(item.get("username", ""), auth_key)
