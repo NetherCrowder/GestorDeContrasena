@@ -1,264 +1,329 @@
 """
 sync_host_view.py - Vista de Servidor (PC) para sincronización local.
-Muestra el QR y el PIN para que el móvil se vincule.
+Muestra el PIN rotativo y la Clave de Seguridad para vinculación en 2 pasos.
+NO usa QR.
 """
 
 import flet as ft
-import qrcode
-import io
-import base64
+import asyncio
 from utils.sync_service import BridgeServer
-from utils.backup import export_passwords_bridge
 from icecream import ic
 
+
 class SyncHostView:
-    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge_server, on_back: callable):
+    def __init__(self, page: ft.Page, db_manager, auth_manager, bridge_server: BridgeServer, on_back: callable):
         self.page = page
         self.db = db_manager
         self.auth = auth_manager
         self.server = bridge_server
         self.on_back = on_back
-        
+
         self.is_active = self.server.is_running
-        
-        # Componentes UI
-        self.status_text = ft.Text("Puente Desconectado", size=16, color=ft.Colors.WHITE54)
-        self.qr_image = ft.Image(src="", width=200, height=200, visible=False)
-        self.copy_btn = ft.TextButton("Copiar Enlace Manual", icon=ft.Icons.COPY, on_click=self.copy_sync_code, visible=False)
-        
-        self.pin_text = ft.Text("---", size=32, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN)
-        self.pin_area = ft.Column([
-            ft.Text("PIN de Respaldo", size=12, color=ft.Colors.WHITE38),
-            self.pin_text,
-        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
-        self.ip_text = ft.Text("", size=14, color=ft.Colors.WHITE38)
-        self.clients_list = ft.Column(spacing=5)
-        
-        self.start_btn = ft.ElevatedButton(
+
+        # --- Componentes de estado ---
+        self.status_dot = ft.Icon(ft.Icons.CIRCLE, color=ft.Colors.RED_400, size=14)
+        self.status_text = ft.Text("Puente Desconectado", size=15, color=ft.Colors.WHITE54)
+
+        # --- PIN ---
+        self.pin_display = ft.Text(
+            "--- ---", size=46, weight=ft.FontWeight.BOLD,
+            color=ft.Colors.CYAN, font_family="monospace"
+        )
+        self.timer_text = ft.Text("⏱ Renueva en: --s", size=12, color=ft.Colors.WHITE38)
+        self.pin_copy_btn = ft.IconButton(
+            icon=ft.Icons.COPY_OUTLINED, tooltip="Copiar PIN",
+            icon_color=ft.Colors.WHITE38, visible=False,
+            on_click=self.copy_pin
+        )
+
+        # --- Alpha Key ---
+        self.alpha_display = ft.Text(
+            "-------", size=28, weight=ft.FontWeight.BOLD,
+            color=ft.Colors.AMBER_300, font_family="monospace"
+        )
+
+        # --- IP del servidor ---
+        self.ip_text = ft.Text("", size=13, color=ft.Colors.WHITE38)
+
+        # --- Lista de clientes ---
+        self.clients_list = ft.Column(spacing=6)
+
+        # --- Botón principal ---
+        self.toggle_btn = ft.FilledButton(
             "Iniciar Puente Seguro",
             icon=ft.Icons.ROUTER,
-            bgcolor=ft.Colors.CYAN_700,
-            color=ft.Colors.WHITE,
+            style=ft.ButtonStyle(bgcolor=ft.Colors.CYAN_700, color=ft.Colors.WHITE),
             on_click=self.toggle_bridge
         )
-        self.refresh_loop_running = False
+
+        self._ui_loop_running = False
 
     def build(self):
-        # Si el servidor ya está activo, restaurar UI
         if self.is_active:
-            self.restore_active_ui()
+            self._restore_active_ui()
+
+        pin_card = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Column([
+                        ft.Text("PIN de Conexión", size=12, color=ft.Colors.WHITE38),
+                        ft.Row([
+                            self.pin_display,
+                            self.pin_copy_btn,
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        self.timer_text,
+                    ], expand=True),
+                ]),
+                ft.Divider(color=ft.Colors.WHITE10),
+                ft.Text("Clave de Seguridad", size=12, color=ft.Colors.WHITE38),
+                self.alpha_display,
+                ft.Text(
+                    "Ingresa la clave en el móvil después de conectar el PIN.",
+                    size=11, color=ft.Colors.WHITE30, italic=True
+                ),
+            ], spacing=10),
+            bgcolor="#1e2a3a",
+            padding=ft.padding.all(24),
+            border_radius=16,
+            border=ft.border.all(1, ft.Colors.WHITE10),
+            width=420,
+        )
+
+        clients_card = ft.Container(
+            content=ft.Column([
+                ft.Text("Dispositivos Conectados", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE60),
+                self.clients_list,
+            ], spacing=8),
+            bgcolor="#1a2332",
+            padding=ft.padding.all(16),
+            border_radius=12,
+            border=ft.border.all(1, ft.Colors.WHITE10),
+            width=420,
+        )
 
         return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda _: self.on_back()),
-                            ft.Text("Puente KeyVault", size=20, weight=ft.FontWeight.BOLD),
-                        ],
-                        alignment=ft.MainAxisAlignment.START,
+            content=ft.Column([
+                # Header
+                ft.Row([
+                    ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda _: self.on_back()),
+                    ft.Text("Puente KeyVault", size=20, weight=ft.FontWeight.BOLD),
+                ], alignment=ft.MainAxisAlignment.START),
+                ft.Divider(height=20, color=ft.Colors.WHITE10),
+
+                # Ícono y título
+                ft.Column([
+                    ft.Icon(ft.Icons.CELL_WIFI, size=50, color=ft.Colors.CYAN),
+                    ft.Text("Sincronización Local", size=22, weight=ft.FontWeight.W_700),
+                    ft.Text(
+                        "Ambos dispositivos deben estar en la misma red WiFi.",
+                        size=13, color=ft.Colors.WHITE38, text_align=ft.TextAlign.CENTER
                     ),
-                    ft.Divider(height=20, color=ft.Colors.WHITE10),
-                    
-                    ft.Column(
-                        [
-                            ft.Icon(ft.Icons.CELL_WIFI, size=50, color=ft.Colors.CYAN),
-                            ft.Text("Sincronización Local", size=24, weight=ft.FontWeight.W_700),
-                            ft.Text(
-                                "Activa el Hotspot de Windows si no estás en la misma red WiFi.",
-                                size=13, color=ft.Colors.WHITE38, text_align=ft.TextAlign.CENTER
-                            ),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=10,
-                        width=float("inf"),
-                    ),
-                    
-                    ft.Container(height=20),
-                    
-                    # Área de Emparejamiento
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                self.status_text,
-                                self.qr_image,
-                                self.copy_btn,
-                                self.pin_area,
-                                self.ip_text,
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=15,
-                        ),
-                        bgcolor="#1e2a3a",
-                        padding=30,
-                        border_radius=20,
-                        border=ft.border.all(1, ft.Colors.WHITE10),
-                        width=400,
-                    ),
-                    
-                    ft.Container(height=10),
-                    self.start_btn,
-                    
-                    ft.Container(height=20),
-                    ft.Text("Dispositivos en línea:", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE54),
-                    self.clients_list,
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            padding=20,
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8,
+                   width=float("inf")),
+
+                ft.Container(height=10),
+
+                # Estado
+                ft.Row([
+                    self.status_dot,
+                    self.status_text,
+                    ft.Container(expand=True),
+                    self.ip_text,
+                ], width=420),
+
+                ft.Container(height=5),
+                pin_card,
+                ft.Container(height=10),
+                self.toggle_btn,
+                ft.Container(height=16),
+                clients_card,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            scroll=ft.ScrollMode.AUTO,
+            spacing=6),
+            padding=24,
             expand=True,
             bgcolor="#0f172a",
         )
 
-    def generate_qr_base64(self, data):
-        qr = qrcode.QRCode(version=1, box_size=10, border=2)
-        qr.add_data(data)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        raw_b64 = base64.b64encode(buffered.getvalue()).decode()
-        return f"data:image/png;base64,{raw_b64}"
+    # ------------------------------------------------------------------ #
+    #  Acciones de UI
+    # ------------------------------------------------------------------ #
+    def copy_pin(self, e):
+        """Copia el PIN al portapapeles."""
+        try:
+            import subprocess
+            pin = self.server.numeric_pin or ""
+            subprocess.run(
+                "clip", input=pin.encode("utf-16le"),
+                check=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            self._show_snackbar(f"PIN copiado: {pin}")
+        except Exception as ex:
+            ic(f"Error copiando PIN: {ex}")
 
     def toggle_bridge(self, e):
         if not self.is_active:
-            self.start_bridge()
+            self._start_bridge()
         else:
-            self.stop_bridge()
+            self._stop_bridge()
 
-    def copy_sync_code(self, e):
-        """Copia el token E2EE completo al portapapeles del PC de forma nativa en Windows."""
-        import subprocess
-        subprocess.run("clip", input=self.qr_payload.strip().encode("utf-16le"), check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        self.page.snack_bar = ft.SnackBar(ft.Text("Enlace de vinculación copiado"), bgcolor=ft.Colors.GREEN_700)
-        self.page.snack_bar.open = True
-        self.page.update()
-
-    def start_bridge(self):
+    def _start_bridge(self):
         try:
-            # Proveedor dinámico: re-exporta las contraseñas frescas en cada petición
+            from utils.backup import export_passwords_bridge
+
             def vault_provider():
                 return export_passwords_bridge(self.db.get_all_passwords(), self.auth.key)
 
-            # Iniciar Servidor con proveedor dinámico
             config = self.server.start(vault_provider)
-            
-            # 3. Generar QR (Data URI completo)
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
-            self.qr_payload = qr_payload
-            self.qr_image.src = self.generate_qr_base64(qr_payload)
-            self.qr_image.visible = True
-            self.copy_btn.visible = True
-            
-            # 4. Actualizar UI
-            self.pin_text.value = config["pin"]
-            self.pin_area.visible = True
-            self.ip_text.value = f"Servidor activo en: {config['ip']}"
-            self.status_text.value = "🟢 Esperando conexión..."
-            self.status_text.color = ft.Colors.CYAN
-            self.start_btn.text = "Detener Puente"
-            self.start_btn.bgcolor = ft.Colors.RED_700
-            
+
+            # Registrar callback para rotación de PIN
+            self.server.on_pin_rotated = self._on_pin_updated
+
             self.is_active = True
-            ic("Servidor de sincronización iniciado")
-            
-            # Iniciar refresco de clientes si no está corriendo
-            if not self.refresh_loop_running:
-                self.page.run_task(self.refresh_clients_loop)
-            
+            self._update_status_ui(active=True, config=config)
+
+            if not self._ui_loop_running:
+                self.page.run_task(self._ui_refresh_loop)
+
         except Exception as ex:
-            ic(f"Fallo al iniciar servidor: {ex}")
-            self.page.snack_bar = ft.SnackBar(ft.Text(f"Error: {ex}"))
-            self.page.snack_bar.open = True
-            
+            ic(f"Error iniciando puente: {ex}")
+            self._show_snackbar(f"Error: {ex}")
+
         self.page.update()
 
-    def stop_bridge(self):
+    def _stop_bridge(self):
         self.server.stop()
-        self.qr_image.visible = False
-        self.pin_area.visible = False
-        self.ip_text.value = ""
-        self.status_text.value = "Puente Desconectado"
-        self.status_text.color = ft.Colors.WHITE54
-        self.start_btn.text = "Iniciar Puente Seguro"
-        self.start_btn.bgcolor = ft.Colors.CYAN_700
+        self.server.on_pin_rotated = None
         self.is_active = False
+        self._update_status_ui(active=False)
         self.page.update()
 
-    async def refresh_clients_loop(self):
-        """Ciclo de actualización de la lista de clientes."""
-        import time
-        import asyncio
-        self.refresh_loop_running = True
+    def _on_pin_updated(self):
+        """Llamado por el servidor cuando el PIN rota. Actualiza la UI."""
+        try:
+            self.pin_display.value = self._format_pin(self.server.numeric_pin)
+            self.alpha_display.value = self.server.alpha_key or "-------"
+            self.page.update()
+        except Exception:
+            pass
+
+    def _format_pin(self, pin: str) -> str:
+        """Formatea el PIN como '123 456' para mejor legibilidad."""
+        if pin and len(pin) == 6:
+            return f"{pin[:3]} {pin[3:]}"
+        return pin or "--- ---"
+
+    def _update_status_ui(self, active: bool, config: dict = None):
+        if active and config:
+            self.status_dot.color = ft.Colors.GREEN_400
+            self.status_text.value = "🟢 Puente Activo — Esperando..."
+            self.status_text.color = ft.Colors.GREEN_300
+            self.pin_display.value = self._format_pin(config.get("pin", ""))
+            self.alpha_display.value = config.get("alpha", "-------")
+            self.ip_text.value = f"{config['ip']}:{config['port']}"
+            self.pin_copy_btn.visible = True
+            self.toggle_btn.text = "Detener Puente"
+            self.toggle_btn.style = ft.ButtonStyle(bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE)
+        else:
+            self.status_dot.color = ft.Colors.RED_400
+            self.status_text.value = "Puente Desconectado"
+            self.status_text.color = ft.Colors.WHITE54
+            self.pin_display.value = "--- ---"
+            self.alpha_display.value = "-------"
+            self.timer_text.value = "⏱ Renueva en: --s"
+            self.ip_text.value = ""
+            self.pin_copy_btn.visible = False
+            self.clients_list.controls = []
+            self.toggle_btn.text = "Iniciar Puente Seguro"
+            self.toggle_btn.style = ft.ButtonStyle(bgcolor=ft.Colors.CYAN_700, color=ft.Colors.WHITE)
+
+    def _restore_active_ui(self):
+        """Restaura la UI cuando se entra a la vista con el servidor ya activo."""
+        config = self.server.last_config
+        if config:
+            self._update_status_ui(active=True, config=config)
+            self.server.on_pin_rotated = self._on_pin_updated
+            # Arrancar el loop de refresco si no está corriendo
+            if not self._ui_loop_running:
+                self.page.run_task(self._ui_refresh_loop)
+
+    # ------------------------------------------------------------------ #
+    #  Loop de actualización de UI (temporizador + lista de clientes)
+    # ------------------------------------------------------------------ #
+    async def _ui_refresh_loop(self):
+        self._ui_loop_running = True
         while self.is_active:
             try:
-                now = time.time()
-                active_clients = []
-                # Limpiar clientes que no han hecho poll en 45 segundos
-                to_remove = []
-                # Acceder a bridge_server.connected_clients
-                clients = self.server.connected_clients
-                for ip, last_seen in list(clients.items()):
-                    if now - last_seen < 45:
-                        active_clients.append(ip)
-                    else:
-                        to_remove.append(ip)
-                
-                for ip in to_remove:
-                    if ip in clients: del clients[ip]
-                
-                # Actualizar UI
-                self.clients_list.controls = [
-                    ft.Row([
-                        ft.Icon(ft.Icons.PHONELINK_LOCK, size=16, color=ft.Colors.GREEN),
-                        ft.Text(f"Móvil ({ip})", size=13, color=ft.Colors.WHITE70)
-                    ]) for ip in active_clients
-                ]
-                
-                if not active_clients:
-                    self.clients_list.controls = [ft.Text("Esperando conexiones...", size=12, italic=True, color=ft.Colors.WHITE38)]
-                
-                self.page.update()
-            except Exception as e:
-                ic(f"Error en refresh loop: {e}")
-            
-            await asyncio.sleep(5)
-        self.refresh_loop_running = False
+                # Actualizar temporizador
+                remaining = self.server.pin_remaining
+                self.timer_text.value = f"⏱ Renueva en: {remaining}s"
 
-    def show_snackbar(self, msg: str):
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg))
+                # Actualizar PIN/Alpha por si rotaron
+                self.pin_display.value = self._format_pin(self.server.numeric_pin)
+                self.alpha_display.value = self.server.alpha_key or "-------"
+
+                # Actualizar lista de clientes
+                now = __import__("time").time()
+                clients = list(self.server.connected_clients.items())
+                
+                # Filtrar clientes inactivos (>45s)
+                active = [(did, info) for did, info in clients
+                          if now - info.get("last_seen", 0) < 45]
+
+                if active:
+                    self.clients_list.controls = []
+                    for did, info in active[:MAX_CLIENTS]:
+                        ago = int(now - info.get("last_seen", now))
+                        self.clients_list.controls.append(
+                            ft.Row([
+                                ft.Icon(ft.Icons.PHONELINK_LOCK, size=16, color=ft.Colors.GREEN_400),
+                                ft.Text(
+                                    f"{info.get('device_name', 'Móvil')} ({info.get('ip', '?')})",
+                                    size=13, color=ft.Colors.WHITE70, expand=True
+                                ),
+                                ft.Text(
+                                    f"Hace {ago}s", size=11, color=ft.Colors.WHITE38
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.LINK_OFF, icon_size=14, tooltip="Revocar",
+                                    icon_color=ft.Colors.RED_300,
+                                    data=did,
+                                    on_click=self._revoke_device
+                                ),
+                            ])
+                        )
+                    count = len(active)
+                    self.status_text.value = f"🟢 {count}/{MAX_CLIENTS} dispositivo{'s' if count != 1 else ''} conectado{'s' if count != 1 else ''}"
+                else:
+                    self.clients_list.controls = [
+                        ft.Text("Esperando conexiones...", size=12, italic=True, color=ft.Colors.WHITE30)
+                    ]
+                    self.status_text.value = "🟢 Puente Activo — Esperando..."
+
+                self.page.update()
+            except Exception as ex:
+                ic(f"Error en UI refresh loop: {ex}")
+
+            await asyncio.sleep(1)
+
+        self._ui_loop_running = False
+
+    def _revoke_device(self, e):
+        """Revoca el acceso de un dispositivo."""
+        did = e.control.data
+        self.server.trusted_devices.pop(did, None)
+        self.server.connected_clients.pop(did, None)
+        self._show_snackbar(f"Dispositivo {did} desconectado.")
+
+    def _show_snackbar(self, msg: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.BLUE_GREY_800)
         self.page.snack_bar.open = True
         self.page.update()
 
-    def stop_and_back(self):
-        self.stop_bridge()
-        self.on_back()
 
-    def restore_active_ui(self):
-        """Si el servidor ya está corriendo, restaura la UI con el último config."""
-        try:
-            config = self.server.last_config
-            if not config: return
-            
-            # Re-generar QR (formato actual sin pregunta de seguridad)
-            qr_payload = f"KV_SYNC|{config['ip']}|{config['port']}|{config['token']}|{config['key_b64']}"
-            self.qr_payload = qr_payload
-            self.qr_image.src = self.generate_qr_base64(qr_payload)
-            self.qr_image.visible = True
-            self.copy_btn.visible = True
-            
-            self.pin_text.value = config["pin"]
-            self.pin_area.visible = True
-            self.ip_text.value = f"Servidor activo en: {config['ip']}"
-            self.status_text.value = "🟢 Puente Activo"
-            self.status_text.color = ft.Colors.CYAN
-            self.start_btn.text = "Detener Puente"
-            self.start_btn.bgcolor = ft.Colors.RED_700
-            
-            # Re-iniciar refresh loop si no está corriendo
-            if not self.refresh_loop_running:
-                self.page.run_task(self.refresh_clients_loop)
-        except Exception as e:
-            ic(f"Error restaurando UI: {e}")
+# Importar MAX_CLIENTS desde sync_service
+try:
+    from utils.sync_service import MAX_CLIENTS
+except ImportError:
+    MAX_CLIENTS = 5

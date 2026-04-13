@@ -1,6 +1,9 @@
 """
 KeyVault — Gestor de Contraseñas Personal
 Punto de entrada de la aplicación Flet (Ejecutable de Windows).
+
+El BridgeServer se inicia automáticamente tras el login y se mantiene
+activo independientemente de la vista en pantalla.
 """
 
 import traceback
@@ -8,8 +11,8 @@ import flet as ft
 from icecream import ic
 from utils.logging_config import setup_logging, register_error
 
-# Inicializar logging
 setup_logging()
+
 
 def main(page: ft.Page):
     # ------------------------------------------------------------------ #
@@ -25,7 +28,6 @@ def main(page: ft.Page):
     page.padding = 0
     page.spacing = 0
 
-    # Dimensiones estándar para escritorio (Windows)
     page.window.width = 1000
     page.window.height = 800
     page.window.resizable = True
@@ -43,24 +45,16 @@ def main(page: ft.Page):
         from views.passwords_view import PasswordsView
         from views.change_password import ChangePasswordView
         from utils.sync_service import BridgeServer
-        
-        # Instanciar managers de datos y seguridad
+        from utils.backup import export_passwords_bridge
+
         db = DatabaseManager()
         db.connect()
         auth = AuthManager(db)
-        
-        # Servicios de Sincronización Globales (Solo Servidor en PC)
-        bridge_server = BridgeServer()
-        
-        # Configurar recepción de datos desde el móvil (Push)
-        def process_remote_vault(data_list):
-            ic(f"SERVER: Recibida actualización desde móvil ({len(data_list)} ítems)")
-            db.import_from_list(data_list, auth.key)
-            # Opcional: Notificación a la interfaz de usuario en el futuro
-        
-        bridge_server.on_vault_received = process_remote_vault
 
-        # Exponer estado y servicios globales en la página
+        # Instanciar el servidor (no iniciarlo aún, esperamos al login)
+        bridge_server = BridgeServer()
+
+        # Exponer servicios globalmente en la página
         page.is_mobile = False
         page.kv_db = db
         page.kv_auth = auth
@@ -75,61 +69,87 @@ def main(page: ft.Page):
             page.overlay.clear()
 
             if view_name == "login":
-                login_view = LoginView(page, auth, on_login_success=lambda: post_login())
-                page.add(login_view.build())
+                view = LoginView(page, auth, on_login_success=lambda: post_login())
+                page.add(view.build())
 
             elif view_name == "dashboard":
-                dashboard = DashboardView(
+                view = DashboardView(
                     page, db, auth, bridge_server,
                     on_navigate=lambda v, **kw: navigate(v, **kw),
                     on_logout=lambda: logout(),
                 )
-                page.add(dashboard.build())
+                page.add(view.build())
 
             elif view_name == "sync_host":
                 from views.sync_host_view import SyncHostView
-                sync_view = SyncHostView(
+                view = SyncHostView(
                     page, db, auth, bridge_server,
                     on_back=lambda: navigate("dashboard")
                 )
-                page.add(sync_view.build())
+                page.add(view.build())
 
             elif view_name == "passwords":
                 category_id = kwargs.get("category_id", 8)
                 categories = db.get_all_categories()
-                category = next((c for c in categories if c["id"] == category_id), categories[-1])
-                pw_view = PasswordsView(
+                category = next(
+                    (c for c in categories if c["id"] == category_id),
+                    categories[-1]
+                )
+                view = PasswordsView(
                     page, db, auth, bridge_server,
                     category=category,
                     on_back=lambda: navigate("dashboard"),
                     on_refresh=lambda: navigate("passwords", category_id=category_id),
                 )
-                page.add(pw_view.build())
+                page.add(view.build())
 
             elif view_name == "change_password":
                 is_forced = kwargs.get("is_forced", False)
-                change_view = ChangePasswordView(
+                view = ChangePasswordView(
                     page, auth,
                     is_forced=is_forced,
                     on_complete=lambda: navigate("dashboard"),
                 )
-                page.add(change_view.build())
+                page.add(view.build())
 
             page.update()
 
+        def _start_bridge():
+            """Inicia el puente en segundo plano si no está activo."""
+            if not bridge_server.is_running:
+                try:
+                    def vault_provider():
+                        return export_passwords_bridge(
+                            db.get_all_passwords(), auth.key
+                        )
+                    bridge_server.start(vault_provider)
+                    ic("BridgeServer iniciado automáticamente tras login.")
+                except Exception as ex:
+                    ic(f"Error iniciando bridge: {ex}")
+
         def post_login():
-            """Acciones post-login: verificar rotación y navegar."""
+            """Acciones post-login: arrancar bridge y navegar."""
+            _start_bridge()
+
             if auth.needs_rotation():
                 navigate("change_password", is_forced=True)
             else:
                 navigate("dashboard")
 
         def logout():
-            """Cerrar sesión."""
+            """Cerrar sesión — el bridge se mantiene activo."""
             auth.lock()
             navigate("login")
 
-        # Iniciar en la pantalla de login
+        # Detener bridge al cerrar la ventana
+        async def on_window_event(e):
+            if e.data == "close":
+                if bridge_server.is_running:
+                    bridge_server.stop()
+
+        page.window.on_event = on_window_event
+
+        # Iniciar en login
         navigate("login")
 
     except Exception as e:
@@ -141,16 +161,18 @@ def main(page: ft.Page):
         page.add(
             ft.ListView(
                 controls=[
-                    ft.Text("⚠️ CRASH FATAL DE INICIALIZACIÓN", color="red", weight=ft.FontWeight.BOLD, size=20),
-                    ft.Text("La aplicación falló al arrancar. Detalles en errors.log.", color="white70"),
-                    ft.Text(error_trace, color="red", selectable=True, font_family="monospace", size=11)
+                    ft.Text("CRASH FATAL DE INICIALIZACION", color="red",
+                            weight=ft.FontWeight.BOLD, size=20),
+                    ft.Text("La aplicacion fallo al arrancar. Detalles en errors.log.",
+                            color="white70"),
+                    ft.Text(error_trace, color="red", selectable=True,
+                            font_family="monospace", size=11)
                 ],
-                expand=True,
-                padding=20,
-                auto_scroll=True
+                expand=True, padding=20, auto_scroll=True
             )
         )
         page.update()
+
 
 if __name__ == "__main__":
     ft.run(main)
