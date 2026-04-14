@@ -28,10 +28,20 @@ Esta rama contiene exclusivamente el cliente nativo para **Windows**. Se ejecuta
    ```
 
 ### Construcción del Ejecutable (Windows)
+
+Si experimentas problemas con `flet build` debido a la sincronización en la nube (OneDrive) o errores de CMake, puedes utilizar cualquiera de estas dos alternativas que funcionan directamente sobre Python:
+
+**Opción A: Usando Flet Pack (Recomendado)**
 ```bash
 flet pack main.py -n "KeyVault" -i assets/icon.png --add-data "assets;assets"
 ```
-Esto generará un archivo `.exe` independiente en la carpeta `dist/`. *(Nota: Se utiliza `flet pack` para evadir los fallos de CMake cuando la carpeta está sincronizada con OneDrive, ya que utiliza PyInstaller internamente)*.
+Esto genera un único archivo `.exe` en la carpeta `dist/`.
+
+**Opción B: Usando PyInstaller Directo**
+```bash
+pyinstaller --noconfirm --onedir --windowed --add-data "assets;assets" --name "KeyVault" main.py
+```
+Esto genera una carpeta con el ejecutable y sus dependencias en `dist/KeyVault/`.
 
 ## 📚 Documentación
 - `docs/WINDOWS_DOCS.md`: Detalle interno del protocolo del servidor y portapapeles.
