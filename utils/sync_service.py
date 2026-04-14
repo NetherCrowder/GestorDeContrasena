@@ -121,6 +121,7 @@ class BridgeServer:
         self.last_config = None
         self.auth_events = []         # lista de (tipo, ip, ts)
         self.on_vault_received = None # callback cuando móvil hace upload
+        self.on_clipboard_push = None # callback cuando móvil envía al portapapeles del PC
         
         # Callbacks de UI
         self.on_pin_rotated = None    # callback() -> None para actualizar UI
@@ -200,16 +201,21 @@ class BridgeServer:
         if device_id in self.trusted_devices:
             trust_token = self.trusted_devices[device_id]
         else:
-            # Si superamos el máximo, eliminar el menos reciente
+            # Si superamos el máximo, eliminar el menos reciente o cualquiera inactivo
             if len(self.trusted_devices) >= MAX_CLIENTS:
-                oldest = min(
-                    self.connected_clients.items(),
-                    key=lambda x: x[1].get("last_seen", 0)
-                )
-                old_id = oldest[0]
+                if self.connected_clients:
+                    oldest = min(
+                        self.connected_clients.items(),
+                        key=lambda x: x[1].get("last_seen", 0)
+                    )
+                    old_id = oldest[0]
+                else:
+                    # Arbitrario si nadie está conectado (el primero del diccionario)
+                    old_id = next(iter(self.trusted_devices.keys()))
+                    
                 self.trusted_devices.pop(old_id, None)
                 self.connected_clients.pop(old_id, None)
-                ic(f"Dispositivo más antiguo removido: {old_id}")
+                ic(f"Dispositivo antiguo removido del almacén en memoria: {old_id}")
             trust_token = base64.b64encode(os.urandom(24)).decode()
             self.trusted_devices[device_id] = trust_token
         
@@ -427,7 +433,7 @@ class BridgeServer:
                 traceback.print_exc()
                 raise HTTPException(status_code=400, detail=f"Error procesando datos: {e}")
 
-        # ----- Portapapeles: Long Polling -----
+        # ----- Portapapeles: Long Polling (PC → Móvil) -----
         @self.app.get("/clipboard/poll")
         async def clipboard_poll(request: Request):
             client_ip = request.client.host
@@ -442,13 +448,28 @@ class BridgeServer:
                     msg = q.get_nowait()
                     session = request.state.session
                     encryptor = session["encryptor"]
-                    
                     encrypted_msg = encryptor.encrypt(msg)
                     return JSONResponse({"data": encrypted_msg})
                 except queue.Empty:
                     await asyncio.sleep(0.5)
             
             return Response(status_code=204)
+
+        # ----- Portapapeles: Push (Móvil → PC) -----
+        @self.app.post("/clipboard/push")
+        async def clipboard_push(request: Request):
+            """Recibe texto del móvil, lo descifra y lo pone en el portapapeles del PC."""
+            try:
+                body = await request.body()
+                session = request.state.session
+                encryptor = session["encryptor"]
+                payload = json.loads(body.decode())
+                decrypted = encryptor.decrypt(payload.get("data", ""))
+                if decrypted and self.on_clipboard_push:
+                    self.on_clipboard_push(decrypted)
+                return JSONResponse({"status": "ok"})
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error: {e}")
 
         # ----- Estado de sincronización -----
         @self.app.get("/sync/status")
@@ -498,6 +519,33 @@ class BridgeServer:
         self._pin_thread.start()
         
         ip = self.get_local_ip()
+
+        # Iniciar zeroconf si está disponible
+        self._zeroconf = None
+        self._service_info = None
+        try:
+            from zeroconf import Zeroconf, ServiceInfo
+            import socket
+            self._zeroconf = Zeroconf()
+            hostname = socket.gethostname()
+            # Quitamos caracteres raros del hostname para evitar errores en zeroconf
+            safe_name = "".join(c for c in hostname if c.isalnum() or c in "-")
+            if not safe_name: safe_name = "PC"
+            
+            desc = {'app': 'keyvault', 'version': '2.0'}
+            self._service_info = ServiceInfo(
+                "_keyvault._tcp.local.",
+                f"KeyVault_{safe_name}._keyvault._tcp.local.",
+                addresses=[socket.inet_aton(ip)],
+                port=self.port,
+                properties=desc,
+                server=f"{safe_name}.local."
+            )
+            self._zeroconf.register_service(self._service_info)
+            ic("Zeroconf: Servicio publicado en la red local.")
+        except Exception as e:
+            ic(f"Zeroconf no disponible o falló al publicar: {e}")
+
         self.last_config = {
             "ip": ip,
             "port": self.port,
@@ -510,15 +558,29 @@ class BridgeServer:
 
     def stop(self):
         """Detiene el servidor."""
+        if hasattr(self, '_zeroconf') and self._zeroconf:
+            try:
+                if hasattr(self, '_service_info') and self._service_info:
+                    self._zeroconf.unregister_service(self._service_info)
+                self._zeroconf.close()
+                ic("Zeroconf: Servicio des-registrado.")
+            except Exception as e:
+                pass
+            self._zeroconf = None
+            
         if self.uvicorn_server:
             self.uvicorn_server.should_exit = True
         self.is_running = False
         ic("BridgeServer detenido.")
 
     def push_clipboard(self, content: str):
-        """Envía contenido al portapapeles de TODOS los clientes conectados."""
+        """Envía contenido al portapapeles de TODOS los clientes móviles conectados (PC → Móvil)."""
         for q in self.client_queues.values():
             q.put(content)
+            
+    def start_clipboard_listener(self, on_receive: callable):
+        """Registra el callback que se dispara cuando el móvil envía texto al PC (Móvil → PC)."""
+        self.on_clipboard_push = on_receive
 
     def push_to_device(self, device_id: str, content: str) -> bool:
         """Envía contenido al portapapeles de UN dispositivo específico.
@@ -754,8 +816,87 @@ class BridgeClient:
 
         threading.Thread(target=loop, daemon=True).start()
 
+    def start_auto_sync_loop(self, db, auth_key, interval: int = 30):
+        """Descarga cambios periódicamente y los fusiona."""
+        if getattr(self, '_auto_sync_running', False):
+            return
+            
+        self._auto_sync_running = True
+        
+        def loop():
+            url = f"{self.base_url}/sync?token={self.token}"
+            while self._auto_sync_running and self.connected:
+                try:
+                    # Traemos toda la bóveda periódicamente
+                    import urllib.request
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            encrypted = resp.read().decode("utf-8")
+                            vault_str = self.encryptor.decrypt(encrypted)
+                            if vault_str:
+                                data_list = json.loads(vault_str)
+                                ins, upd, skp = db.import_from_list(data_list, auth_key)
+                                if (ins > 0 or upd > 0) and self.on_vault_sync:
+                                    self.on_vault_sync(ins, upd)
+                except Exception as e:
+                    ic(f"Error en auto-sync background: {e}")
+                
+                # Dormimos el intervalo en picos pequeños para poder abortar si se desconecta
+                for _ in range(interval * 2):
+                    if not self._auto_sync_running or not self.connected:
+                        break
+                    time.sleep(0.5)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def push_to_server_raw(self, data_list: list[dict]) -> bool:
+        """Envía una lista de contraseñas descifradas al PC.
+        
+        El servidor espera: POST /sync/upload?token=<token>
+        Body JSON: {"data": "<encrypted_json_string>"}
+        """
+        if not self.connected or not self.encryptor:
+            ic("push_to_server_raw: sin conexión activa.")
+            return False
+        try:
+            url = f"{self.base_url}/sync/upload?token={self.token}"
+            payload_str = json.dumps(data_list, ensure_ascii=False)
+            encrypted = self.encryptor.encrypt(payload_str)
+            body = json.dumps({"data": encrypted}).encode("utf-8")
+
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status == 200
+        except Exception as e:
+            ic(f"Error en push_to_server_raw: {e}")
+            return False
+
+    def push_clipboard(self, text: str) -> bool:
+        """Envía texto al portapapeles del PC de forma bidireccional."""
+        if not self.connected or not self.encryptor:
+            return False
+        try:
+            url = f"{self.base_url}/clipboard/push?token={self.token}"
+            encrypted = self.encryptor.encrypt(text)
+            body = json.dumps({"data": encrypted}).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception as e:
+            ic(f"Error en push_clipboard: {e}")
+            return False
+
     def stop_listener(self):
         self.is_listening = False
+        self._auto_sync_running = False
         self.connected = False
 
 

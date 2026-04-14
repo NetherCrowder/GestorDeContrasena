@@ -322,7 +322,10 @@ class DashboardView:
             username = decrypt(pw["username"], self.auth.key)
             
             # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, username)
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, username)
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(username)
             
             # Mostrar visualmente en el botón
             original_text = e.control.content
@@ -347,7 +350,10 @@ class DashboardView:
             password = decrypt(pw["password"], self.auth.key)
             
             # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, password)
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, password)
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(password)
             
             # Mostrar visualmente en el botón
             original_text = e.control.content

@@ -117,28 +117,92 @@ def main(page: ft.Page):
             device_id = db.get_config("device_id")
             
             if last_server_ip and trust_token and device_id:
-                def _try_reconnect():
-                    # Callback para cuando el móvil recibe datos
-                    def on_remote_vault(v):
-                        from views.sync_client_view import SyncClientView
-                        # Simulamos una vista temporal para importar
-                        tmp = SyncClientView(page, db, auth, bridge_client, on_back=lambda: None)
-                        tmp.import_vault_data(v)
+                # Capturar en variables locales inmutables para el cierre (closure)
+                _saved_ip = last_server_ip
+                _saved_token = trust_token
+                _saved_device = device_id
 
-                    success = getattr(bridge_client, "attempt_silent_handshake", lambda *a: False)(
-                        last_server_ip, 5005, device_id, trust_token
+                def _try_reconnect():
+                    # Usamos lista mutable para poder reasignar la IP dentro de la clausura
+                    server_ip = [_saved_ip]
+
+                    def on_remote_vault(v):
+                        try:
+                            import json
+                            data_list = json.loads(v)
+                            db.import_from_list(data_list, auth.key)
+                        except Exception as e:
+                            ic(f"Error importando bóveda remota silenciosa: {e}")
+
+                    def _safe_clipboard(txt):
+                        from utils.clipboard_helper import copy_to_clipboard
+                        try:
+                            copy_to_clipboard(page, txt)
+                            page.snack_bar = ft.SnackBar(
+                                ft.Text("📋 ¡Portapapeles del PC recibido!"),
+                                bgcolor=ft.Colors.GREEN_400
+                            )
+                            page.snack_bar.open = True
+                            page.update()
+                        except Exception as ex:
+                            ic(f"Clipboard UI error: {ex}")
+
+                    # --- Intento 1: IP guardada ---
+                    success = bridge_client.attempt_silent_handshake(
+                        server_ip[0], 5005, _saved_device, _saved_token
                     )
+
+                    # --- Intento 2: Fallback via mDNS si la IP cambió ---
+                    if not success:
+                        try:
+                            from zeroconf import Zeroconf, ServiceBrowser
+                            import socket, time
+
+                            class SilentLocate:
+                                def __init__(self): self.ip = None
+                                def remove_service(self, z, t, n): pass
+                                def update_service(self, z, t, n): pass
+                                def add_service(self, zc, type_, name):
+                                    info = zc.get_service_info(type_, name)
+                                    if info and info.addresses:
+                                        self.ip = socket.inet_ntoa(info.addresses[0])
+
+                            zc = Zeroconf()
+                            sl = SilentLocate()
+                            sb = ServiceBrowser(zc, "_keyvault._tcp.local.", sl)
+                            time.sleep(3)
+                            try: sb.cancel()
+                            except: pass
+                            zc.close()
+
+                            if sl.ip:
+                                server_ip[0] = sl.ip
+                                db.set_config("last_sync_ip", sl.ip)
+                                success = bridge_client.attempt_silent_handshake(
+                                    server_ip[0], 5005, _saved_device, _saved_token
+                                )
+                        except Exception as ex:
+                            ic(f"Error en fallback Zeroconf móvil: {ex}")
+
+                    # --- Conexión completa si el handshake fue exitoso ---
                     if success:
-                        bridge_client.connect(
-                            last_server_ip, 5005, bridge_client.token, 
-                            bridge_client.key, trust_token,
-                            device_id=device_id,
+                        connected = bridge_client.connect(
+                            server_ip[0], 5005,
+                            bridge_client.token,
+                            bridge_client.key,
                             on_vault=on_remote_vault,
-                            on_clipboard=lambda c: page.set_clipboard(c)
+                            on_clipboard=_safe_clipboard,
+                            trust_token=_saved_token,
+                            device_id=_saved_device
                         )
-                
+                        if connected:
+                            bridge_client.start_auto_sync_loop(db, auth.key)
+                            ic("Reconexión silenciosa completa. Clipboard y auto-sync activos.")
+                    else:
+                        ic("Reconexión silenciosa fallida. Necesita vinculación manual.")
+
                 import threading
-                threading.Thread(target=_try_reconnect, daemon=True).start()
+                threading.Thread(target=_try_reconnect, name="SilentReconnect", daemon=True).start()
 
             if auth.needs_rotation():
                 navigate("change_password", is_forced=True)

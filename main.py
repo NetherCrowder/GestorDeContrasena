@@ -1,10 +1,8 @@
 """
 KeyVault — Gestor de Contraseñas Personal
-Punto de entrada de la aplicación Flet con soporte híbrido PC/Móvil.
+Punto de entrada de la aplicación Flet (Ejecutable de Móvil).
 """
 
-import os
-import sys
 import traceback
 import flet as ft
 from icecream import ic
@@ -27,10 +25,10 @@ def main(page: ft.Page):
     page.padding = 0
     page.spacing = 0
 
-    # Dimensiones para escritorio
-    page.window.width = 1000
-    page.window.height = 800
-    page.window.resizable = True
+    # Simulación de móvil en Escritorio o ejecución nativa
+    page.window.width = 400
+    page.window.height = 750
+    page.window.resizable = False
     page.window.min_width = 400
     page.window.min_height = 600
 
@@ -44,147 +42,21 @@ def main(page: ft.Page):
         from views.dashboard_view import DashboardView
         from views.passwords_view import PasswordsView
         from views.change_password import ChangePasswordView
-        from utils.sync_service import BridgeServer, BridgeClient
-
+        from utils.sync_service import BridgeClient
+        
+        # Instanciar managers de datos y seguridad
         db = DatabaseManager()
         db.connect()
         auth = AuthManager(db)
         
-        import sys
-        
-        # Detección real de entorno Móvil (Android/iOS) + Flag local de pruebas
-        is_mobile = "--mobile" in sys.argv or "android" in str(page.platform).lower() or "ios" in str(page.platform).lower()
-
-        # Servicios de Sincronización Globales
-        bridge_server = BridgeServer() if not is_mobile else None
+        # Servicios de Sincronización Globales (Solo Cliente/Móvil)
         bridge_client = BridgeClient()
 
-        def global_clipboard_alert(text):
-            try:
-                import subprocess
-                subprocess.run("clip", input=text.strip().encode("utf-16le"), check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                page.snack_bar = ft.SnackBar(ft.Text("📋 Sincronizado desde PC", color=ft.Colors.WHITE), bgcolor=ft.Colors.GREEN_700)
-                page.snack_bar.open = True
-                page.update()
-            except Exception as e:
-                ic(f"Error clipboard global: {e}")
-
-        bridge_client.on_clipboard_global = global_clipboard_alert
-
-        def _do_vault_sync_and_resume():
-            """Helper: descarga vault, aplica merge, reanuda listener y guarda pairing."""
-            v = bridge_client.download_vault()
-            if v:
-                try:
-                    from utils.backup import apply_bridge_vault
-                    ins, upd, _ = apply_bridge_vault(v, db, auth.key)
-                    ic(f"Watcher sync: {ins} ins, {upd} upd")
-                    if (ins + upd) > 0 and bridge_client.on_vault_sync:
-                        bridge_client.on_vault_sync(ins, upd)
-                except Exception as ex:
-                    ic(f"Watcher vault merge error: {ex}")
-            bridge_client.start_clipboard_listener(lambda _: None)
-            bridge_client.save_pairing()
-
-        def _refresh_ui(msg: str, color):
-            """Refresca la UI desde un hilo background de forma segura."""
-            try:
-                page.snack_bar = ft.SnackBar(
-                    ft.Text(msg, color=ft.Colors.WHITE), bgcolor=color
-                )
-                page.snack_bar.open = True
-                navigate(_current_view["name"], **_current_view.get("kwargs", {}))
-                page.update()
-            except Exception as e:
-                ic(f"_refresh_ui error: {e}")
-
-        def _reconnect_watcher():
-            """Loop de reconexión: reintenta cada 10s usando credenciales en memoria."""
-            import time as _t
-            ic("Watcher iniciado. Reintentando cada 10s...")
-            while not bridge_client.is_listening:
-                _t.sleep(10)
-                if bridge_client.is_listening:
-                    break
-                try:
-                    if bridge_client.try_reconnect():
-                        ic("Servidor detectado. Reconectando...")
-                        _do_vault_sync_and_resume()
-                        _refresh_ui("🔗 Reconectado al PC automáticamente", ft.Colors.GREEN_800)
-                        break
-                except Exception as ex:
-                    ic(f"Watcher retry: {ex}")
-            ic("Watcher finalizado.")
-
-        def global_disconnect_alert():
-            """Llamado cuando el servidor PC deja de responder al heartbeat."""
-            import threading as _th_dc
-            try:
-                # NO borrar pairing — credenciales siguen siendo válidas para reconectar
-                _refresh_ui("🔴 Conexión con PC perdida", ft.Colors.RED_800)
-            except Exception as e:
-                ic(f"global_disconnect_alert error: {e}")
-            _th_dc.Thread(target=_reconnect_watcher, daemon=True).start()
-
-        bridge_client.on_disconnect = global_disconnect_alert
-
-        # Configurar archivo de pairing (varía si estamos en modo mobile-test)
-        import sys
-        from pathlib import Path
-        _kv_dir = Path(os.environ.get("FLET_APP_STORAGE_DATA", "") or 
-                       os.environ.get("LOCALAPPDATA", "") or 
-                       os.path.expanduser("~")) / "KeyVault"
-        _kv_dir.mkdir(parents=True, exist_ok=True)
-        _suffix = "_mobile_test" if is_mobile else ""
-        bridge_client.set_pairing_file(str(_kv_dir / f"pairing{_suffix}.json"))
-        if bridge_server is not None:
-            bridge_server.set_pairing_file(str(_kv_dir / "server_pairing.json"))
-
-        # Estado compartido para el callback de sincronización global
-        _current_view = {"name": "login"}
-
-        def global_vault_sync(ins: int, upd: int):
-            """Llamado desde el hilo de sync cuando hay cambios. Refresca la UI global."""
-            try:
-                if ins + upd == 0:
-                    return
-                # Mostrar bolita siempre
-                msg = f"✅ Sincronizado: {ins} nuevas, {upd} actualizadas"
-                page.snack_bar = ft.SnackBar(ft.Text(msg, color=ft.Colors.WHITE), bgcolor=ft.Colors.CYAN_800)
-                page.snack_bar.open = True
-                # Si el usuario está en el dashboard o passwords, refrescar esa vista
-                if _current_view["name"] in ("dashboard", "passwords"):
-                    navigate(_current_view["name"], **_current_view.get("kwargs", {}))
-                else:
-                    page.update()
-            except Exception as e:
-                ic(f"global_vault_sync error: {e}")
-
-        bridge_client.on_vault_sync = global_vault_sync
-
-        # ------------------------------------------------------------------ #
-        #  Demonio de Sincronización Continua (Móvil)
-        # ------------------------------------------------------------------ #
-        if is_mobile:
-            def _global_vault_polling_daemon():
-                import time
-                import threading
-                ic("Daemon global de sincronización iniciado.")
-                while True:
-                    time.sleep(15)  # Verifica cada 15s
-                    if bridge_client.is_listening:
-                        try:
-                            # Solo sincroniza si el sistema no está bloqueado (evitar spam si hay error)
-                            new_vault = bridge_client.download_vault()
-                            if new_vault:
-                                from utils.backup import apply_bridge_vault
-                                i2, u2, _ = apply_bridge_vault(new_vault, db, auth.key)
-                                if (i2 + u2) > 0 and bridge_client.on_vault_sync:
-                                    bridge_client.on_vault_sync(i2, u2)
-                        except Exception as e:
-                            ic(f"Global sync error: {e}")
-            import threading as _th_glob
-            _th_glob.Thread(target=_global_vault_polling_daemon, daemon=True).start()
+        # Exponer estado y servicios globales en la página
+        page.is_mobile = True
+        page.kv_db = db
+        page.kv_auth = auth
+        page.kv_bridge = bridge_client
 
         # ------------------------------------------------------------------ #
         #  Navegación
@@ -194,36 +66,17 @@ def main(page: ft.Page):
             page.controls.clear()
             page.overlay.clear()
 
-            # Registrar vista activa para el callback de sincronización global
-            _current_view["name"] = view_name
-            _current_view["kwargs"] = kwargs
-
-            # Determinar el servicio de bridge correcto según la plataforma o argumento CLI
-            is_mobile = page.platform in [ft.PagePlatform.ANDROID, ft.PagePlatform.IOS]
-            if "--mobile" in sys.argv:
-                is_mobile = True
-
-            current_bridge = bridge_client if is_mobile else bridge_server
-
             if view_name == "login":
                 login_view = LoginView(page, auth, on_login_success=lambda: post_login())
                 page.add(login_view.build())
 
             elif view_name == "dashboard":
                 dashboard = DashboardView(
-                    page, db, auth, current_bridge,
+                    page, db, auth, bridge_client,
                     on_navigate=lambda v, **kw: navigate(v, **kw),
                     on_logout=lambda: logout(),
                 )
                 page.add(dashboard.build())
-
-            elif view_name == "sync_host":
-                from views.sync_host_view import SyncHostView
-                sync_view = SyncHostView(
-                    page, db, auth, bridge_server,
-                    on_back=lambda: navigate("dashboard")
-                )
-                page.add(sync_view.build())
 
             elif view_name == "sync_client":
                 from views.sync_client_view import SyncClientView
@@ -238,7 +91,7 @@ def main(page: ft.Page):
                 categories = db.get_all_categories()
                 category = next((c for c in categories if c["id"] == category_id), categories[-1])
                 pw_view = PasswordsView(
-                    page, db, auth, current_bridge,
+                    page, db, auth, bridge_client,
                     category=category,
                     on_back=lambda: navigate("dashboard"),
                     on_refresh=lambda: navigate("passwords", category_id=category_id),
@@ -257,28 +110,99 @@ def main(page: ft.Page):
             page.update()
 
         def post_login():
-            """Acciones post-login: verificar rotación y navegar."""
-            # Intentar reconectar automáticamente desde el pairing guardado (modo móvil)
-            if "--mobile" in sys.argv and not bridge_client.is_listening:
-                import threading
-                def _try_reconnect():
-                    ok = bridge_client.load_pairing()
-                    if ok:
-                        # Servidor disponible → sincronizar y reanudar
-                        msg_prefix = "🔗 Reconectado"
-                        try:
-                            _do_vault_sync_and_resume()
-                            bridge_client.save_pairing()
-                        except Exception as ex:
-                            ic(f"Error en auto-sync al inicio: {ex}")
-                        _refresh_ui(f"{msg_prefix} · Bóveda al día", ft.Colors.GREEN_800)
-                    else:
-                        # Servidor no disponible al inicio → lanzar watcher unificado
-                        ic("Servidor offline al inicio. Watcher en espera...")
-                        import threading as _th4
-                        _th4.Thread(target=_reconnect_watcher, daemon=True).start()
+            """Acciones post-login: verificar rotación, reconectar sync y navegar."""
+            # Intentar reconexión automática
+            last_server_ip = db.get_config("last_sync_ip")
+            trust_token = db.get_config("trust_token")
+            device_id = db.get_config("device_id")
+            
+            if last_server_ip and trust_token and device_id:
+                # Capturar en variables locales inmutables para el cierre (closure)
+                _saved_ip = last_server_ip
+                _saved_token = trust_token
+                _saved_device = device_id
 
-                threading.Thread(target=_try_reconnect, daemon=True).start()
+                def _try_reconnect():
+                    # Usamos lista mutable para poder reasignar la IP dentro de la clausura
+                    server_ip = [_saved_ip]
+
+                    def on_remote_vault(v):
+                        try:
+                            import json
+                            data_list = json.loads(v)
+                            db.import_from_list(data_list, auth.key)
+                        except Exception as e:
+                            ic(f"Error importando bóveda remota silenciosa: {e}")
+
+                    def _safe_clipboard(txt):
+                        from utils.clipboard_helper import copy_to_clipboard
+                        try:
+                            copy_to_clipboard(page, txt)
+                            page.snack_bar = ft.SnackBar(
+                                ft.Text("📋 ¡Portapapeles del PC recibido!"),
+                                bgcolor=ft.Colors.GREEN_400
+                            )
+                            page.snack_bar.open = True
+                            page.update()
+                        except Exception as ex:
+                            ic(f"Clipboard UI error: {ex}")
+
+                    # --- Intento 1: IP guardada ---
+                    success = bridge_client.attempt_silent_handshake(
+                        server_ip[0], 5005, _saved_device, _saved_token
+                    )
+
+                    # --- Intento 2: Fallback via mDNS si la IP cambió ---
+                    if not success:
+                        try:
+                            from zeroconf import Zeroconf, ServiceBrowser
+                            import socket, time
+
+                            class SilentLocate:
+                                def __init__(self): self.ip = None
+                                def remove_service(self, z, t, n): pass
+                                def update_service(self, z, t, n): pass
+                                def add_service(self, zc, type_, name):
+                                    info = zc.get_service_info(type_, name)
+                                    if info and info.addresses:
+                                        self.ip = socket.inet_ntoa(info.addresses[0])
+
+                            zc = Zeroconf()
+                            sl = SilentLocate()
+                            sb = ServiceBrowser(zc, "_keyvault._tcp.local.", sl)
+                            time.sleep(3)
+                            try: sb.cancel()
+                            except: pass
+                            zc.close()
+
+                            if sl.ip:
+                                server_ip[0] = sl.ip
+                                db.set_config("last_sync_ip", sl.ip)
+                                success = bridge_client.attempt_silent_handshake(
+                                    server_ip[0], 5005, _saved_device, _saved_token
+                                )
+                        except Exception as ex:
+                            ic(f"Error en fallback Zeroconf móvil: {ex}")
+
+                    # --- Conexión completa si el handshake fue exitoso ---
+                    if success:
+                        connected = bridge_client.connect(
+                            server_ip[0], 5005,
+                            bridge_client.token,
+                            bridge_client.key,
+                            on_vault=on_remote_vault,
+                            on_clipboard=_safe_clipboard,
+                            trust_token=_saved_token,
+                            device_id=_saved_device
+                        )
+                        if connected:
+                            bridge_client.start_auto_sync_loop(db, auth.key)
+                            ic("Reconexión silenciosa completa. Clipboard y auto-sync activos.")
+                    else:
+                        ic("Reconexión silenciosa fallida. Necesita vinculación manual.")
+
+                import threading
+                threading.Thread(target=_try_reconnect, name="SilentReconnect", daemon=True).start()
 
             if auth.needs_rotation():
                 navigate("change_password", is_forced=True)

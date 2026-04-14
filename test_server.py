@@ -67,14 +67,18 @@ def run_test_server():
     print("="*50)
     
     mock_db = MockDB()
-    server = BridgeServer(port=5005, db_manager=mock_db)
+    server = BridgeServer(port=5005)
     
-    config = server.start(mock_db.get_vault_b64())
+    # Proveedor de bóveda (retorna JSON plano)
+    def vault_provider():
+        import json
+        return json.dumps(mock_db.vault_list, ensure_ascii=False)
+        
+    config = server.start(vault_provider=vault_provider)
     
     # Callback para cuando el servidor recibe datos del cliente (upload)
     def _on_upload(data):
         mock_db.import_from_list(data, None)
-        server.vault_data = mock_db.get_vault_b64() # Actualizar b64 circulando
         print(f"[SYNC] Bóveda actualizada localmente. Nueva Versión: {mock_db.get_config('sync_version')}")
 
     server.on_vault_received = _on_upload
@@ -126,8 +130,6 @@ def run_test_server():
                 # Incrementar versión
                 v = int(mock_db.get_config("sync_version")) + 1
                 mock_db.set_config("sync_version", str(v))
-                # Actualizar data en el servidor
-                server.vault_data = mock_db.get_vault_b64()
                 print(f"[DB] Ítem añadido. Nueva versión: {v}. El móvil debería detectarlo solo.")
             else:
                 server.push_clipboard(cmd)
