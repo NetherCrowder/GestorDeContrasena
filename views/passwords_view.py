@@ -218,9 +218,7 @@ class PasswordsView:
                 self.page.run_task(refresh)
             except Exception as ex:
                 register_error(f"Error deleting password {pw_id}", ex)
-                self.page.snack_bar = ft.SnackBar(ft.Text("Error al eliminar"))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.show_snackbar("Error al eliminar")
 
         dialog = ft.AlertDialog(
             title=ft.Text("¿Eliminar contraseña?", color=ft.Colors.WHITE),

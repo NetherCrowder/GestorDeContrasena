@@ -17,8 +17,16 @@ import os
 from security.crypto import decrypt as decrypt_master
 
 def get_base_data_path() -> Path:
-    """Retorna la ruta base en AppData/Local/KeyVault."""
-    base = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+    """Retorna la ruta base persistente operativa (Windows o Android)."""
+    # En Android, flet provee esta variable para almacenamiento persistente de la app.
+    app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+    
+    if app_storage:
+        base = Path(app_storage)
+    else:
+        # Ruta persistente en Windows (AppData/Local/KeyVault)
+        base = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+        
     base.mkdir(parents=True, exist_ok=True)
     return base
 
