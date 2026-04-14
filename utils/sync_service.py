@@ -1,7 +1,6 @@
 """
 sync_service.py - Núcleo de comunicación P2P para KeyVault.
-Implementa el servidor (Host) y el cliente (Móvil) con cifrado E2EE.
-Utilizar únicamente la librería estándar y pyaes (vendoreado).
+Implementa el servidor (Host/PC) con cifrado E2EE y autenticación en 2 pasos.
 """
 
 import json
@@ -12,11 +11,13 @@ import os
 import time
 import hashlib
 import hmac
-from icecream import ic
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
+import random
+import string
 import urllib.request
+import urllib.parse
 import queue
+import asyncio
+from icecream import ic
 
 # Importación de pyaes (asumiendo que está en el root)
 import pyaes
@@ -24,6 +25,8 @@ import pyaes
 # Configuración global
 DEFAULT_PORT = 5005
 MAC_SIZE = 32
+MAX_CLIENTS = 5
+PIN_VALIDITY = 120  # segundos
 
 # ------------------------------------------------------------------ #
 #  Criptografía de Sesión (E2EE)
@@ -41,15 +44,12 @@ class SessionEncryptor:
         raw_data = data.encode("utf-8")
         iv = os.urandom(16)
         
-        # Cifrado AES-CTR
         counter = pyaes.Counter(initial_value=int.from_bytes(iv, "big"))
         aes = pyaes.AESModeOfOperationCTR(self.key, counter=counter)
         ciphertext = aes.encrypt(raw_data)
         
-        # Firma HMAC para integridad
         mac = hmac.new(self.key, iv + ciphertext, hashlib.sha256).digest()
         
-        # Empaquetado
         package = iv + mac + ciphertext
         return base64.b64encode(package).decode("utf-8")
 
@@ -64,12 +64,10 @@ class SessionEncryptor:
             mac = package[16:16+MAC_SIZE]
             ciphertext = package[16+MAC_SIZE:]
             
-            # Verificar integridad
             expected_mac = hmac.new(self.key, iv + ciphertext, hashlib.sha256).digest()
             if not hmac.compare_digest(mac, expected_mac):
                 return None
             
-            # Descifrado AES-CTR
             counter = pyaes.Counter(initial_value=int.from_bytes(iv, "big"))
             aes = pyaes.AESModeOfOperationCTR(self.key, counter=counter)
             decrypted = aes.decrypt(ciphertext)
@@ -78,409 +76,563 @@ class SessionEncryptor:
             return None
 
 # ------------------------------------------------------------------ #
-#  Servidor de Puente (PC Host)
+#  Servidor de Puente (PC/Windows)
 # ------------------------------------------------------------------ #
-class BridgeRequestHandler(BaseHTTPRequestHandler):
-    """Manejador de peticiones para el servidor de sincronización."""
-    
-    def log_message(self, format, *args):
-        # Silenciar logs automáticos para no saturar consola
-        pass
-
-    def do_GET(self):
-        """Maneja peticiones de sincronización y eventos con manejo de desconexión ruidosa."""
-        try:
-            self._do_GET_safe()
-        except (ConnectionResetError, BrokenPipeError):
-            # Cliente se desconectó a la fuerza, ignoramos para no ensuciar logs
-            pass
-
-    def _do_GET_safe(self):
-        """Lógica real de GET protegida."""
-        manager = getattr(self.server, 'manager', None)
-        if not manager:
-            self.send_error(500, "Error de configuración")
-            return
-        
-        # Inyectar DB si el manager la tiene
-        db = getattr(manager, 'db', None)
-        
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(self.path)
-        params = parse_qs(parsed.query)
-        token = params.get("token", [None])[0]
-
-        # ---------------------------------------------------------
-        # Paso 1: Auth Knock con PIN Numérico
-        # ---------------------------------------------------------
-        if parsed.path == "/auth/step1":
-            # El token que envía el cliente debe ser Hash(PIN_NUMERICO)
-            expected_h = hashlib.sha256(manager.numeric_pin.encode()).hexdigest()
-            if not token or token != expected_h:
-                self.send_error(403, "PIN Incorrecto")
-                return
-            
-            # Registrar como 'pendiente de validación alpha'
-            client_ip = self.client_address[0]
-            if client_ip not in manager.pending_handshakers:
-                manager.pending_handshakers.append(client_ip)
-            
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "need_alpha", "msg": "PIN Correctos. Ingresa clave Alpha."}).encode())
-            return
-
-        # ---------------------------------------------------------
-        # Paso 2: Verificación Alfanumérica y Entrega de Llaves
-        # ---------------------------------------------------------
-        elif parsed.path == "/auth/step2":
-            client_ip = self.client_address[0]
-            alpha_input = params.get("alpha", [None])[0]
-            
-            if client_ip not in manager.pending_handshakers:
-                self.send_error(403, "Debes completar el Paso 1 primero")
-                return
-                
-            if not alpha_input or alpha_input.upper() != manager.alpha_key.upper():
-                # REGISTRAR FRACASO: PIN ALPHA INCORRECTO
-                manager.auth_events.append(("failure", client_ip, time.time()))
-                manager.regenerate_pins()
-                self.send_error(401, "Clave Alfanumérica Incorrecta")
-                return
-
-            # ÉXITO: Entregar Token de Sesión Real y Clave Maestra cifrada
-            transport_seed = (manager.numeric_pin + manager.alpha_key).encode()
-            transport_key = hashlib.sha256(transport_seed).digest()
-            transport_enc = SessionEncryptor(transport_key)
-            
-            # Generar Token de Confianza Persistente para este dispositivo
-            trust_token = base64.b64encode(os.urandom(24)).decode("utf-8")
-            device_id = params.get("device_id", ["generic_device"])[0]
-            device_name = params.get("device_name", ["Móvil"])[0]
-            
-            if db:
-                db.register_trusted_device(device_id, device_name, trust_token)
-
-            key_b64 = base64.b64encode(manager.session_key).decode()
-            credentials = json.dumps({
-                "t": manager.session_token, 
-                "k": key_b64,
-                "trust": trust_token
-            })
-            encrypted_creds = transport_enc.encrypt(credentials)
-            
-            # REGISTRAR ÉXITO
-            manager.auth_events.append(("success", client_ip, time.time()))
-            
-            manager.connected_clients[client_ip] = time.time()
-            if client_ip in manager.pending_handshakers:
-                manager.pending_handshakers.remove(client_ip)
-
-            # ROTAR PINES tras éxito (seguridad máxima)
-            manager.regenerate_pins()
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"data": encrypted_creds}).encode())
-            return
-
-        # ---------------------------------------------------------
-        # Handshake Silencioso (Para dispositivos conocidos)
-        # ---------------------------------------------------------
-        elif parsed.path == "/auth/trust":
-            d_id = params.get("device_id", [None])[0]
-            d_token = params.get("trust_token", [None])[0]
-            
-            if not db or not d_id or not d_token:
-                self.send_error(400, "Faltan parámetros de confianza")
-                return
-            
-            trusted = db.get_trusted_device(d_id)
-            if trusted and trusted["trust_token"] == d_token:
-                # Dispositivo reconocido - Entregar secretos de sesión sin 2FA
-                client_ip = self.client_address[0]
-                manager.connected_clients[client_ip] = time.time()
-                db.update_device_connection(d_id)
-                
-                credentials = json.dumps({
-                    "t": manager.session_token, 
-                    "k": base64.b64encode(manager.session_key).decode()
-                })
-                # Usamos el trust_token como llave de transporte temporal para este paquete
-                transport_key = hashlib.sha256(d_token.encode()).digest()
-                transport_enc = SessionEncryptor(transport_key)
-                
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"data": transport_enc.encrypt(credentials)}).encode())
-                return
-            else:
-                ic(f"TRUST: Intento fallido de {d_id} (Token inválido)")
-                self.send_response(401)
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "trust_token_invalid"}).encode())
-                return
-
-        # ---------------------------------------------------------
-        # Endpoints de Sesión Activa (Requieren Token de Sesión Real)
-        # ---------------------------------------------------------
-        if not token or token != manager.session_token:
-            self.send_error(403, "No autorizado (Sesion expirada o invalida)")
-            return
-
-        # Endpoint: /handshake (Ping de Sesión para BridgeClient)
-        if parsed.path == "/handshake":
-            client_ip = self.client_address[0]
-            manager.connected_clients[client_ip] = time.time()
-            
-            # Obtener versión actual de la DB
-            db_v = db.get_config("sync_version") if db else "0"
-            
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "status": "ok",
-                "server_name": "KeyVault-PC",
-                "db_version": db_v
-            }).encode())
-            return
-
-        # Endpoint: /sync/status (Check de versión rápido)
-        elif parsed.path == "/sync/status":
-            db_v = db.get_config("sync_version") if db else "0"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"v": db_v}).encode())
-            return
-
-        # Endpoint: /sync (Obtener bóveda cifrada)
-        if parsed.path == "/sync":
-            if not manager.vault_data:
-                self.send_error(404, "Bóveda no preparada")
-                return
-            
-            encrypted_vault = manager.encryptor.encrypt(manager.vault_data)
-            
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.end_headers()
-            self.wfile.write(encrypted_vault.encode())
-            
-        # Endpoint: /clipboard/poll (Long polling)
-        elif parsed.path == "/clipboard/poll":
-            client_ip = self.client_address[0]
-            manager.connected_clients[client_ip] = time.time()
-            if client_ip not in manager.client_queues:
-                manager.client_queues[client_ip] = queue.Queue()
-            
-            try:
-                msg = manager.client_queues[client_ip].get(timeout=20)
-                encrypted_msg = manager.encryptor.encrypt(msg)
-                
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"data": encrypted_msg}).encode())
-            except queue.Empty:
-                self.send_response(204)
-                self.end_headers()
-
-    def do_POST(self):
-        """Maneja recepción de datos (Sincronización reversa)."""
-        manager = getattr(self.server, 'manager', None)
-        db = getattr(manager, 'db', None)
-        
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(self.path)
-        params = parse_qs(parsed.query)
-        token = params.get("token", [None])[0]
-
-        if not token or token != manager.session_token:
-            self.send_error(403, "Token inválido para POST")
-            return
-
-        if parsed.path == "/sync/upload":
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            
-            try:
-                # Descifrar paquete
-                decrypted_json = manager.encryptor.decrypt(post_data.decode("utf-8"))
-                if not decrypted_json:
-                    raise ValueError("Fallo de descifrado en upload")
-                
-                vault_data = json.loads(decrypted_json)
-                # Notificar al manager que hay datos recibidos (el manager debe procesarlos)
-                if hasattr(manager, 'on_vault_received') and manager.on_vault_received:
-                    manager.on_vault_received(vault_data)
-
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
-            except Exception as e:
-                ic(f"Error on upload POST: {e}")
-                self.send_error(400, str(e))
-
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """Servidor HTTP multi-hilo."""
-    pass
-
 class BridgeServer:
-    """Implementación del Servidor de Sincronización."""
+    """
+    Servidor de Sincronización P2P con autenticación en 2 pasos.
     
-    def __init__(self, port=DEFAULT_PORT, db_manager=None):
+    Flujo de vinculación:
+      1. Cliente llama GET /auth/step1?pin_hash=<sha256(pin)>
+         → Si pin correcto: responde {"status": "need_alpha"}
+         → Rota el PIN en caso de fallo
+      2. Cliente llama GET /auth/step2?alpha=<alpha>&device_id=<id>
+         → Si alpha correcta: cifra credenciales (token+key) con SHA256(pin+alpha)
+         → Emite trust_token y registra dispositivo
+         → Rota PIN y Alpha después del éxito
+      3. Reconexión: GET /auth/trust?device_id=<id>&trust_token=<token>
+         → Si token válido: emite nuevas credenciales (el token no cambia)
+    """
+    
+    def __init__(self, port=DEFAULT_PORT):
+        from fastapi import FastAPI
         self.port = port
-        self.db = db_manager # Necesario para trust tokens y versionado
-        self.server = None
+        self.uvicorn_server = None
         self.thread = None
-        self.session_token = None
-        self.session_key = None
-        self.encryptor = None
-        self.vault_data = None # Almacena el binario .vk (en base64 o raw)
-        self.client_queues = {} # Colas por IP para clipboard push
-        self.connected_clients = {} # IP -> Last Seen Timestamp
-        self.pending_handshakers = [] # IPs que pasaron el PIN numérico
-        self.auth_events = [] # (type, ip, timestamp) para feedback en UI
-        self.is_running = False
-        self.last_config = None
+        self.app = FastAPI(title="KeyVault Sync Server")
+        
+        # Gestión de sesiones (Multi-dispositivo)
+        self.sessions = {}            # token -> {"device_id": str, "encryptor": SessionEncryptor}
+        self.vault_provider = None
+        
+        # Sistema de PIN rotativo
         self.numeric_pin = None
         self.alpha_key = None
-        self.zeroconf = None
-        self.zeroconf_info = None
-        self.on_vault_received = None # Callback para procesar subidas del móvil
+        self.pin_expires_at = 0
+        self._pending_pin_hash = None  # Guardado tras Step1 exitoso
+        
+        # Gestión de clientes
+        self.client_queues = {}       # ip -> queue.Queue
+        self.connected_clients = {}   # device_id -> {ip, last_seen, device_name}
+        self.trusted_devices = {}     # device_id -> trust_token
+        
+        # Estado y eventos
+        self.is_running = False
+        self.last_config = None
+        self.auth_events = []         # lista de (tipo, ip, ts)
+        self.on_vault_received = None # callback cuando móvil hace upload
+        self.on_clipboard_push = None # callback cuando móvil envía al portapapeles del PC
+        
+        # Callbacks de UI
+        self.on_pin_rotated = None    # callback() -> None para actualizar UI
+        
+        # Persistencia de dispositivos
+        self._devices_file = os.path.join(
+            os.getenv("LOCALAPPDATA", ""), "KeyVault", "bridge_devices.json"
+        ) if os.name == "nt" else "bridge_devices.json"
+        self._load_trusted_devices()
 
-    def start(self, vault_data: str):
-        """Inicia el servidor en un hilo separado y emite el servicio mDNS."""
-        import random
-        from zeroconf import ServiceInfo, Zeroconf
+        self._setup_routes()
         
-        # Generar secretos de sesión
-        self.session_key = os.urandom(32)
-        self.session_token = base64.b64encode(os.urandom(12)).decode("utf-8").replace("=", "")
-        self.encryptor = SessionEncryptor(self.session_key)
-        self.vault_data = vault_data
+    def _load_trusted_devices(self):
+        """Carga los tokens de confianza guardados desde el disco."""
+        try:
+            if os.path.exists(self._devices_file):
+                with open(self._devices_file, "r") as f:
+                    self.trusted_devices = json.load(f)
+                ic(f"[{len(self.trusted_devices)}] Dispositivos de confianza cargados.")
+        except Exception as e:
+            ic(f"Error cargando dispositivos de confianza: {e}")
+
+    def _save_trusted_devices(self):
+        """Guarda los tokens de confianza al disco."""
+        try:
+            os.makedirs(os.path.dirname(self._devices_file), exist_ok=True)
+            with open(self._devices_file, "w") as f:
+                json.dump(self.trusted_devices, f)
+        except Exception as e:
+            ic(f"Error guardando dispositivos de confianza: {e}")
+    
+    # ------------------------------------------------------------------ #
+    #  PIN Management
+    # ------------------------------------------------------------------ #
+    def _generate_pin(self) -> str:
+        """Genera un PIN numérico de 6 dígitos."""
+        return str(random.randint(100000, 999999))
+    
+    def _generate_alpha(self) -> str:
+        """Genera una clave alfanumérica de 7 caracteres (mayúsculas + dígitos)."""
+        chars = string.ascii_uppercase + string.digits
+        return "".join(random.choices(chars, k=7))
+    
+    def rotate_credentials(self):
+        """Genera nuevos PIN y Alpha, reinicia temporizador."""
+        self.numeric_pin = self._generate_pin()
+        self.alpha_key = self._generate_alpha()
+        self.pin_expires_at = time.time() + PIN_VALIDITY
+        self._pending_pin_hash = None
+        ic(f"Credenciales rotadas → PIN: {self.numeric_pin} | Alpha: {self.alpha_key}")
+        if self.on_pin_rotated:
+            try:
+                self.on_pin_rotated()
+            except Exception:
+                pass
+
+    def _pin_rotation_loop(self):
+        """Hilo daemon: rota el PIN cada PIN_VALIDITY segundos."""
+        while self.is_running:
+            now = time.time()
+            remaining = self.pin_expires_at - now
+            if remaining <= 0:
+                self.rotate_credentials()
+            time.sleep(1)
+    
+    @property
+    def pin_remaining(self) -> int:
+        """Segundos restantes para la rotación del PIN."""
+        return max(0, int(self.pin_expires_at - time.time()))
+    
+    # ------------------------------------------------------------------ #
+    #  Gestión de Dispositivos de Confianza
+    # ------------------------------------------------------------------ #
+    def _register_trusted_device(self, device_id: str, ip: str, name: str = "Móvil") -> str:
+        """Registra un dispositivo y retorna su trust_token (máx. MAX_CLIENTS)."""
+        # Si ya existe, reutilizar el mismo trust_token
+        if device_id in self.trusted_devices:
+            trust_token = self.trusted_devices[device_id]
+        else:
+            # Si superamos el máximo, eliminar el menos reciente o cualquiera inactivo
+            if len(self.trusted_devices) >= MAX_CLIENTS:
+                if self.connected_clients:
+                    oldest = min(
+                        self.connected_clients.items(),
+                        key=lambda x: x[1].get("last_seen", 0)
+                    )
+                    old_id = oldest[0]
+                else:
+                    # Arbitrario si nadie está conectado (el primero del diccionario)
+                    old_id = next(iter(self.trusted_devices.keys()))
+                    
+                self.trusted_devices.pop(old_id, None)
+                self.connected_clients.pop(old_id, None)
+                ic(f"Dispositivo antiguo removido del almacén en memoria: {old_id}")
+            trust_token = base64.b64encode(os.urandom(24)).decode()
+            self.trusted_devices[device_id] = trust_token
+        
+        self.connected_clients[device_id] = {
+            "ip": ip,
+            "last_seen": time.time(),
+            "device_name": name
+        }
+        self._save_trusted_devices()
+        return trust_token
+
+    # ------------------------------------------------------------------ #
+    #  Rutas HTTP (FastAPI)
+    # ------------------------------------------------------------------ #
+    def _setup_routes(self):
+        from fastapi import Request, Response, HTTPException
+        from fastapi.responses import JSONResponse
+
+        # ----- Ruta de estado público (sin autenticación) -----
+        @self.app.get("/")
+        async def root_ping():
+            return {"status": "ok", "message": "KeyVault Bridge Running"}
+
+        # ----- Middleware de autenticación por token -----
+        @self.app.middleware("http")
+        async def auth_middleware(request: Request, call_next):
+            # Rutas publicas (no requieren token de sesión)
+            path = request.url.path
+            public_paths = ["/", "/auth/step1", "/auth/step2", "/auth/trust", "/ping"]
+            if path in public_paths:
+                return await call_next(request)
+            
+            token = request.query_params.get("token")
+            if not token or token not in self.sessions:
+                return JSONResponse(status_code=403, content={"error": "unauthorized"})
+            
+            # Asociar sesión a la petición
+            session = self.sessions[token]
+            request.state.session = session
+            
+            # Actualizar actividad
+            device_id = session.get("device_id")
+            if device_id and device_id in self.connected_clients:
+                self.connected_clients[device_id]["last_seen"] = time.time()
+                if path in ["/sync", "/sync/upload"]:
+                    self.connected_clients[device_id]["last_sync"] = time.time()
+            
+            return await call_next(request)
+
+        # ----- PASO 1: Verificar PIN -----
+        @self.app.get("/auth/step1")
+        async def auth_step1(request: Request):
+            pin_hash = request.query_params.get("pin_hash", "")
+            client_ip = request.client.host
+            
+            expected_hash = hashlib.sha256(self.numeric_pin.encode()).hexdigest()
+            
+            if pin_hash == expected_hash and time.time() < self.pin_expires_at:
+                # Guardar hash para verificar en Step 2
+                self._pending_pin_hash = pin_hash
+                self.auth_events.append(("step1_ok", client_ip, time.time()))
+                return JSONResponse({"status": "need_alpha"})
+            else:
+                # PIN incorrecto o expirado: rotar
+                self.auth_events.append(("step1_fail", client_ip, time.time()))
+                self.rotate_credentials()
+                return JSONResponse(status_code=401, content={"error": "pin_invalid"})
+
+        # ----- PASO 2: Verificar Alpha Key + emitir credenciales -----
+        @self.app.get("/auth/step2")
+        async def auth_step2(request: Request):
+            alpha = request.query_params.get("alpha", "").upper()
+            device_id = request.query_params.get("device_id", "unknown")
+            device_name = request.query_params.get("device_name", "Movil")
+            client_ip = request.client.host
+            
+            # Verificar que el Step1 fue completado
+            if not self._pending_pin_hash:
+                return JSONResponse(status_code=403, content={"error": "step1_required"})
+            
+            # Verificar Alpha Key
+            if alpha != self.alpha_key:
+                self.auth_events.append(("step2_fail", client_ip, time.time()))
+                self.rotate_credentials()
+                return JSONResponse(status_code=401, content={"error": "alpha_invalid"})
+            
+            # Autenticación completa: generar credenciales de sesión
+            session_key = os.urandom(32)
+            session_token = os.urandom(16).hex()
+            
+            # Registrar dispositivo y obtener trust_token
+            trust_token = self._register_trusted_device(device_id, client_ip, device_name)
+            
+            # Empaquetar credenciales
+            credentials = json.dumps({
+                "t": session_token,
+                "k": base64.b64encode(session_key).decode(),
+                "trust": trust_token
+            })
+            
+            # Cifrar con llave derivada de PIN + Alpha (temporal, solo para el transporte)
+            transport_seed = (self.numeric_pin + self.alpha_key).encode()
+            transport_key = hashlib.sha256(transport_seed).digest()
+            transport_enc = SessionEncryptor(transport_key)
+            encrypted_creds = transport_enc.encrypt(credentials)
+            
+            # Limpiar sesiones antiguas de este mismo dispositivo
+            old_tokens = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+            for t in old_tokens: self.sessions.pop(t, None)
+
+            # Registrar nueva sesión
+            self.sessions[session_token] = {
+                "device_id": device_id,
+                "encryptor": SessionEncryptor(session_key)
+            }
+            
+            self.auth_events.append(("success", client_ip, time.time()))
+            ic(f"Sesion creada para '{device_id}' desde {client_ip}")
+            
+            # Rotar PIN y Alpha después del éxito
+            self.rotate_credentials()
+            
+            return JSONResponse({"data": encrypted_creds})
+
+        # ----- Reconexión silenciosa por trust_token -----
+        @self.app.get("/auth/trust")
+        async def auth_trust(request: Request):
+            device_id = request.query_params.get("device_id", "")
+            trust_token = request.query_params.get("trust_token", "")
+            client_ip = request.client.host
+            
+            known_token = self.trusted_devices.get(device_id)
+            
+            if not known_token or known_token != trust_token:
+                return JSONResponse(status_code=401, content={"error": "trust_token_invalid"})
+            
+            # Emitir nuevas credenciales de sesión
+            session_key = os.urandom(32)
+            session_token = os.urandom(16).hex()
+            
+            credentials = json.dumps({
+                "t": session_token,
+                "k": base64.b64encode(session_key).decode()
+            })
+            
+            # Cifrar con el trust_token como llave temporal
+            transport_key = hashlib.sha256(trust_token.encode()).digest()
+            transport_enc = SessionEncryptor(transport_key)
+            encrypted_creds = transport_enc.encrypt(credentials)
+            
+            # Limpiar sesiones antiguas de este mismo dispositivo (Opcional, pero recomendado)
+            old_tokens = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+            for t in old_tokens: self.sessions.pop(t, None)
+
+            # Actualizar sesión
+            self.sessions[session_token] = {
+                "device_id": device_id,
+                "encryptor": SessionEncryptor(session_key)
+            }
+            
+            if device_id in self.connected_clients:
+                self.connected_clients[device_id]["last_seen"] = time.time()
+                self.connected_clients[device_id]["ip"] = client_ip
+            else:
+                # Recuperar de dispositivos de confianza si es que el servidor se reinició
+                self.connected_clients[device_id] = {
+                    "ip": client_ip,
+                    "last_seen": time.time(),
+                    "device_name": "Dispositivo Vinculado"
+                }
+            
+            ic(f"Reconexion silenciosa de {device_id} desde {client_ip}")
+            return JSONResponse({"data": encrypted_creds})
+
+        # ----- Sincronización: descargar bóveda -----
+        @self.app.get("/sync")
+        async def sync_vault(request: Request):
+            fresh_vault = self.vault_provider() if self.vault_provider else None
+            if fresh_vault is None:
+                raise HTTPException(status_code=404, detail="Boveda no preparada")
+            
+            session = request.state.session
+            encryptor = session["encryptor"]
+            
+            # fresh_vault ya debería ser un string JSON (desde backup.py)
+            encrypted = encryptor.encrypt(str(fresh_vault))
+            return Response(content=encrypted.encode(), media_type="application/octet-stream")
+
+        # ----- Sincronización: subir bóveda desde móvil -----
+        @self.app.post("/sync/upload")
+        async def sync_upload(request: Request):
+            body = await request.body()
+            session = request.state.session
+            encryptor = session["encryptor"]
+            
+            try:
+                payload = json.loads(body.decode())
+                encrypted = payload.get("data", "")
+                decrypted = encryptor.decrypt(encrypted)
+                if decrypted and self.on_vault_received:
+                    incoming = json.loads(decrypted)
+                    # Soportar formato bridge_v1 o lista plana
+                    if isinstance(incoming, dict) and incoming.get("fmt") == "bridge_v1":
+                        data_list = incoming.get("data", [])
+                    elif isinstance(incoming, list):
+                        data_list = incoming
+                    else:
+                        raise ValueError("Formato de datos no soportado")
+                        
+                    self.on_vault_received(data_list)
+                    return JSONResponse({"status": "ok"})
+            except Exception as e:
+                import traceback
+                print(f"Error en sync/upload: {e}")
+                traceback.print_exc()
+                raise HTTPException(status_code=400, detail=f"Error procesando datos: {e}")
+
+        # ----- Portapapeles: Long Polling (PC → Móvil) -----
+        @self.app.get("/clipboard/poll")
+        async def clipboard_poll(request: Request):
+            client_ip = request.client.host
+            if client_ip not in self.client_queues:
+                self.client_queues[client_ip] = queue.Queue()
+            
+            for _ in range(40):  # 40 * 0.5s = 20s max espera
+                q = self.client_queues.get(client_ip)
+                if not q:
+                    return Response(status_code=204)
+                try:
+                    msg = q.get_nowait()
+                    session = request.state.session
+                    encryptor = session["encryptor"]
+                    encrypted_msg = encryptor.encrypt(msg)
+                    return JSONResponse({"data": encrypted_msg})
+                except queue.Empty:
+                    await asyncio.sleep(0.5)
+            
+            return Response(status_code=204)
+
+        # ----- Portapapeles: Push (Móvil → PC) -----
+        @self.app.post("/clipboard/push")
+        async def clipboard_push(request: Request):
+            """Recibe texto del móvil, lo descifra y lo pone en el portapapeles del PC."""
+            try:
+                body = await request.body()
+                session = request.state.session
+                encryptor = session["encryptor"]
+                payload = json.loads(body.decode())
+                decrypted = encryptor.decrypt(payload.get("data", ""))
+                if decrypted and self.on_clipboard_push:
+                    self.on_clipboard_push(decrypted)
+                return JSONResponse({"status": "ok"})
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error: {e}")
+
+        # ----- Estado de sincronización -----
+        @self.app.get("/sync/status")
+        async def sync_status():
+            clients = []
+            now = time.time()
+            for did, info in list(self.connected_clients.items()):
+                clients.append({
+                    "device_id": did,
+                    "ip": info.get("ip"),
+                    "last_seen_ago": int(now - info.get("last_seen", now)),
+                    "device_name": info.get("device_name", "Movil")
+                })
+            return JSONResponse({"clients": clients, "count": len(clients)})
+
+        # ----- Handshake simple (para keep-alive del cliente) -----
+        @self.app.get("/handshake")
+        async def handshake():
+            return JSONResponse({"status": "ok", "server": "KeyVault-PC"})
+
+    # ------------------------------------------------------------------ #
+    #  Ciclo de vida
+    # ------------------------------------------------------------------ #
+    def start(self, vault_provider: callable):
+        """Inicia el servidor y el ciclo de rotación de PIN."""
+        import uvicorn
+        
+        class NoSignalServer(uvicorn.Server):
+            def install_signal_handlers(self):
+                pass
+        
+        # Generar credenciales iniciales
+        self.rotate_credentials()
+        
+        self.vault_provider = vault_provider
         self.is_running = True
+        self.client_queues.clear()
         
-        self.server = ThreadedHTTPServer(("0.0.0.0", self.port), BridgeRequestHandler)
-        self.server.manager = self # Facilitar acceso a datos en el handler
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # Servidor Uvicorn
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.port, log_level="error")
+        self.uvicorn_server = NoSignalServer(config=config)
+        self.thread = threading.Thread(target=self.uvicorn_server.run, daemon=True)
         self.thread.start()
         
-        # Generar PIN Numérico (6 dígitos) y Alpha (7 chars)
-        self.numeric_pin = str(random.randint(100000, 999999))
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        self.alpha_key = ''.join(random.choices(alphabet, k=7))
+        # Hilo de rotación de PIN
+        self._pin_thread = threading.Thread(target=self._pin_rotation_loop, daemon=True)
+        self._pin_thread.start()
         
-        # Cifrar carga Zeroconf solo con el PIN Numérico
         ip = self.get_local_ip()
-        pin_hash = hashlib.sha256(self.numeric_pin.encode()).digest()
-        pin_enc = SessionEncryptor(pin_hash)
-        
-        invite = json.dumps({"status": "ready", "server": "KeyVault-PC"})
-        encrypted_invite_b64 = pin_enc.encrypt(invite)
-        
-        desc = {b'v': b'1', b'p': encrypted_invite_b64.encode("utf-8")}
-        self.zeroconf_info = ServiceInfo(
-            "_keyvault._tcp.local.",
-            f"KeyVault-{random.randint(1000, 9999)}._keyvault._tcp.local.",
-            addresses=[socket.inet_aton(ip)],
-            port=self.port,
-            properties=desc,
-            server=f"kv-{ip.replace('.', '-')}.local."
-        )
-        
-        def _register_mdns():
-            import asyncio
-            asyncio.set_event_loop(asyncio.new_event_loop())
-            try:
-                self.zeroconf = Zeroconf()
-                self.zeroconf.register_service(self.zeroconf_info)
-                print("Zeroconf service broadcasted successfully.")
-            except Exception as e:
-                print(f"Fallo en hilo mdns: {e}")
-                
-        threading.Thread(target=_register_mdns, daemon=True).start()
-        
+
+        # Iniciar zeroconf si está disponible
+        self._zeroconf = None
+        self._service_info = None
+        try:
+            from zeroconf import Zeroconf, ServiceInfo
+            import socket
+            self._zeroconf = Zeroconf()
+            hostname = socket.gethostname()
+            # Quitamos caracteres raros del hostname para evitar errores en zeroconf
+            safe_name = "".join(c for c in hostname if c.isalnum() or c in "-")
+            if not safe_name: safe_name = "PC"
+            
+            desc = {'app': 'keyvault', 'version': '2.0'}
+            self._service_info = ServiceInfo(
+                "_keyvault._tcp.local.",
+                f"KeyVault_{safe_name}._keyvault._tcp.local.",
+                addresses=[socket.inet_aton(ip)],
+                port=self.port,
+                properties=desc,
+                server=f"{safe_name}.local."
+            )
+            self._zeroconf.register_service(self._service_info)
+            ic("Zeroconf: Servicio publicado en la red local.")
+        except Exception as e:
+            ic(f"Zeroconf no disponible o falló al publicar: {e}")
+
         self.last_config = {
             "ip": ip,
             "port": self.port,
             "pin": self.numeric_pin,
-            "alpha": self.alpha_key
+            "alpha": self.alpha_key,
         }
+        
+        ic(f"BridgeServer iniciado en {ip}:{self.port}")
         return self.last_config
 
-    def regenerate_pins(self):
-        """Genera nuevos PINs y actualiza el anuncio Zeroconf."""
-        import random
-        from zeroconf import Zeroconf, ServiceInfo
-
-        self.numeric_pin = str(random.randint(100000, 999999))
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        self.alpha_key = ''.join(random.choices(alphabet, k=7))
-        
-        self.pending_handshakers.clear()
-        
-        ip = self.get_local_ip()
-        pin_hash = hashlib.sha256(self.numeric_pin.encode()).digest()
-        pin_enc = SessionEncryptor(pin_hash)
-        
-        invite = json.dumps({"status": "ready", "server": "KeyVault-PC"})
-        encrypted_invite_b64 = pin_enc.encrypt(invite)
-        
-        desc = {b'v': b'1', b'p': encrypted_invite_b64.encode("utf-8")}
-        
-        self.last_config = {
-            "ip": ip,
-            "port": self.port,
-            "pin": self.numeric_pin,
-            "alpha": self.alpha_key
-        }
-
-        def _update_mdns():
-            if self.zeroconf:
-                try:
-                    self.zeroconf.unregister_service(self.zeroconf_info)
-                    self.zeroconf_info = ServiceInfo(
-                        "_keyvault._tcp.local.",
-                        f"KeyVault-{random.randint(1000, 9999)}._keyvault._tcp.local.",
-                        addresses=[socket.inet_aton(ip)],
-                        port=self.port,
-                        properties=desc,
-                        server=f"kv-{ip.replace('.', '-')}.local."
-                    )
-                    self.zeroconf.register_service(self.zeroconf_info)
-                    print(f"PINs rotados. Nuevo PIN: {self.numeric_pin}")
-                except Exception as e:
-                    print(f"Error rotando mdns: {e}")
-                    
-        threading.Thread(target=_update_mdns, daemon=True).start()
-
     def stop(self):
-        """Detiene el servidor y elimina el anuncio mDNS."""
-        if getattr(self, "zeroconf", None):
+        """Detiene el servidor."""
+        if hasattr(self, '_zeroconf') and self._zeroconf:
             try:
-                self.zeroconf.unregister_service(self.zeroconf_info)
-                self.zeroconf.close()
+                if hasattr(self, '_service_info') and self._service_info:
+                    self._zeroconf.unregister_service(self._service_info)
+                self._zeroconf.close()
+                ic("Zeroconf: Servicio des-registrado.")
             except Exception as e:
-                print(f"Error cerrando zeroconf: {e}")
-            self.zeroconf = None
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
+                pass
+            self._zeroconf = None
+            
+        if self.uvicorn_server:
+            self.uvicorn_server.should_exit = True
         self.is_running = False
+        ic("BridgeServer detenido.")
 
     def push_clipboard(self, content: str):
-        """Envía contenido al portapapeles de todos los clientes conectados."""
+        """Envía contenido al portapapeles de TODOS los clientes móviles conectados (PC → Móvil)."""
         for q in self.client_queues.values():
             q.put(content)
+            
+    def start_clipboard_listener(self, on_receive: callable):
+        """Registra el callback que se dispara cuando el móvil envía texto al PC (Móvil → PC)."""
+        self.on_clipboard_push = on_receive
+
+    def push_to_device(self, device_id: str, content: str) -> bool:
+        """Envía contenido al portapapeles de UN dispositivo específico.
+        
+        Returns True si el dispositivo está en línea, False si no se encontró.
+        """
+        info = self.connected_clients.get(device_id)
+        if not info:
+            return False
+        ip = info.get("ip")
+        q = self.client_queues.get(ip)
+        if q:
+            q.put(content)
+            return True
+        return False
+
+    # --- Grupo B: Control y Seguridad ---
+    
+    def revoke_device(self, device_id: str):
+        """Elimina el dispositivo de confianza y cierra sus sesiones activas."""
+        self.trusted_devices.pop(device_id, None)
+        self.connected_clients.pop(device_id, None)
+        
+        # Eliminar sesiones de este dispositivo
+        tokens_to_remove = [t for t, s in self.sessions.items() if s.get("device_id") == device_id]
+        for t in tokens_to_remove:
+            self.sessions.pop(t, None)
+            
+        self._save_trusted_devices()
+        ic(f"Dispositivo revocado: {device_id}")
+
+    def revoke_all_devices(self):
+        """Revoca todos los dispositivos y limpia todas las sesiones."""
+        self.trusted_devices.clear()
+        self.connected_clients.clear()
+        self.sessions.clear()
+        self._save_trusted_devices()
+        ic("Todos los dispositivos han sido revocados.")
+
+    def lock_device(self, device_id: str) -> bool:
+        """Envía un comando de bloqueo remoto a un dispositivo específico."""
+        return self.push_to_device(device_id, ":::KV_CMD_LOCK:::")
+        
+    def lock_all_devices(self):
+        """Envía un comando de bloqueo remoto a todos los dispositivos."""
+        self.push_clipboard(":::KV_CMD_LOCK:::")
+
+    def get_connection_history(self) -> list:
+        """Retorna el historial de eventos de autenticación."""
+        return self.auth_events
 
     def get_local_ip(self):
-        """Intenta obtener la IP de la interfaz activa (Hotspot o WiFi)."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -494,58 +646,65 @@ class BridgeServer:
 #  Cliente de Puente (Móvil)
 # ------------------------------------------------------------------ #
 class BridgeClient:
-    """Implementación del Cliente para descargar y escuchar eventos."""
+    """Cliente de sincronización para la versión móvil."""
     
-    def __init__(self, db_manager=None, auth_manager=None):
+    def __init__(self):
         self.base_url = None
-        self.token = None # session_token
-        self.key = None   # session_key
-        self.trust_token = None
-        self.device_id = None
-        self.db = db_manager
-        self.auth = auth_manager
+        self.token = None
+        self.key = None
         self.encryptor = None
         self.is_listening = False
-        self.is_syncing = False
-        self.last_db_version = "0"
+        self.on_clipboard_global = None
+        self.on_vault_sync = None
+        self.on_disconnect = None
         self.connected = False
-        self.on_status_change = None # Callback (status: str)
+        self.trust_token = None
+        self.device_id = None
+        self._pairing_file = None
 
-    def connect(self, ip, port, token, encryption_key, trust_token=None, device_id=None, on_vault: callable = None, on_clipboard: callable = None) -> bool:
-        """Configura el cliente y verifica la conexión real (Handshake)."""
-        try:
-            self.base_url = f"http://{ip}:{port}"
-            self.token = token
-            self.key = encryption_key if isinstance(encryption_key, bytes) else base64.b64decode(encryption_key)
-            self.trust_token = trust_token
-            # device_id: Usado para el registro en el Host
-            self.encryptor = SessionEncryptor(self.key)
-            
-            # 1. VERIFICACIÓN REAL (Handshake)
-            handshake_url = f"{self.base_url}/handshake?token={self.token}"
-            with urllib.request.urlopen(handshake_url, timeout=5) as resp:
-                if resp.status != 200:
-                    return False
-                data = json.loads(resp.read().decode())
-                self.last_db_version = data.get("db_version", "0")
-                print(f"Handshake exitoso con PC (v{self.last_db_version})")
+    @property
+    def is_running(self):
+        return self.is_listening
 
-            self.connected = True
-            if self.on_status_change: self.on_status_change("online")
+    def set_pairing_file(self, path: str):
+        self._pairing_file = path
 
-            # 2. Descargar Bóveda inicial si se requiere
-            if on_vault:
-                vault = self.download_vault()
-                if vault: on_vault(vault)
-                
-            # 3. Iniciar hilos de monitoreo
-            self.start_clipboard_listener(on_clipboard)
-            self.start_auto_sync_loop(on_vault)
-            return True
-        except Exception as e:
-            print(f"Fallo de conexión real: {e}")
-            self.connected = False
+    def save_pairing(self):
+        if not self._pairing_file or not self.base_url or not self.token:
+            return
+        data = {
+            "base_url": self.base_url,
+            "token": self.token,
+            "key_b64": base64.b64encode(self.key).decode() if self.key else None,
+            "trust_token": self.trust_token,
+            "device_id": self.device_id,
+        }
+        os.makedirs(os.path.dirname(self._pairing_file), exist_ok=True)
+        with open(self._pairing_file, "w") as f:
+            json.dump(data, f)
+
+    def load_pairing(self) -> bool:
+        if not self._pairing_file or not os.path.exists(self._pairing_file):
             return False
+        try:
+            with open(self._pairing_file) as f:
+                data = json.load(f)
+            self.base_url = data.get("base_url")
+            self.token = data.get("token")
+            key_b64 = data.get("key_b64")
+            self.trust_token = data.get("trust_token")
+            self.device_id = data.get("device_id")
+            if key_b64:
+                self.key = base64.b64decode(key_b64)
+                self.encryptor = SessionEncryptor(self.key)
+            return bool(self.base_url and self.token)
+        except Exception as e:
+            ic(f"No se pudo cargar el pairing: {e}")
+            return False
+
+    def clear_pairing(self):
+        if self._pairing_file and os.path.exists(self._pairing_file):
+            os.remove(self._pairing_file)
 
     def attempt_silent_handshake(self, ip, port, device_id, trust_token) -> bool:
         """Intenta reconectar sin PIN usando el token de confianza."""
@@ -554,13 +713,10 @@ class BridgeClient:
             with urllib.request.urlopen(url, timeout=3) as resp:
                 if resp.status == 200:
                     raw_data = json.loads(resp.read().decode())
-                    # Desencriptar respuesta de sesión (usando trust_token como llave temporal)
                     transport_key = hashlib.sha256(trust_token.encode()).digest()
                     transport_enc = SessionEncryptor(transport_key)
-                    
                     creds_json = transport_enc.decrypt(raw_data["data"])
                     creds = json.loads(creds_json)
-                    
                     self.base_url = f"http://{ip}:{port}"
                     self.token = creds["t"]
                     self.key = base64.b64decode(creds["k"])
@@ -568,84 +724,186 @@ class BridgeClient:
                     self.device_id = device_id
                     self.encryptor = SessionEncryptor(self.key)
                     self.connected = True
-                    ic(f"Reconexión silenciosa exitosa con {ip}")
+                    ic(f"Reconexion silenciosa exitosa con {ip}")
                     return True
-        except (urllib.error.URLError, urllib.error.HTTPError) as e:
-            # Fallo silencioso (PC apagado o token expirado)
-            if self.on_status_change: self.on_status_change("offline")
+        except (urllib.error.URLError, urllib.error.HTTPError):
+            pass  # Servidor offline o token invalido — silencioso
         except Exception as e:
             ic(f"Error inesperado en silent handshake: {e}")
         return False
 
+    def connect(self, ip, port, token, encryption_key,
+                on_vault: callable, on_clipboard: callable,
+                trust_token: str = None, device_id: str = None) -> bool:
+        """Configura el cliente y verifica la conexión."""
+        try:
+            self.base_url = f"http://{ip}:{port}"
+            self.token = token
+            self.key = base64.b64decode(encryption_key) if isinstance(encryption_key, str) else encryption_key
+            self.encryptor = SessionEncryptor(self.key)
+            if trust_token:
+                self.trust_token = trust_token
+            if device_id:
+                self.device_id = device_id
+            
+            # Verificar conexión
+            handshake_url = f"{self.base_url}/handshake?token={self.token}"
+            with urllib.request.urlopen(handshake_url, timeout=5) as resp:
+                if resp.status != 200:
+                    return False
+                ic("Handshake exitoso con PC")
+            
+            # Descargar bóveda inicial
+            vault = self.download_vault()
+            if vault and on_vault:
+                on_vault(vault)
+            
+            # Iniciar escucha de portapapeles
+            self.start_clipboard_listener(on_clipboard)
+            self.connected = True
+            return True
+        except Exception as e:
+            ic(f"Fallo de conexion: {e}")
+            return False
+
     def download_vault(self) -> str | None:
-        """Descarga la bóveda cifrada del PC."""
         try:
             url = f"{self.base_url}/sync?token={self.token}"
-            with urllib.request.urlopen(url, timeout=10) as response:
-                if response.status == 200:
-                    encrypted_data = response.read().decode("utf-8")
-                    return self.encryptor.decrypt(encrypted_data)
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                if resp.status == 200:
+                    encrypted = resp.read().decode("utf-8")
+                    return self.encryptor.decrypt(encrypted)
         except Exception as e:
-            print(f"Error al descargar vault: {e}")
+            ic(f"Error al descargar vault: {e}")
         return None
 
-    def start_auto_sync_loop(self, on_vault: callable):
-        """Monitor de versiones para sincronización automática."""
-        self.is_syncing = True
-        
+    def start_clipboard_listener(self, on_receive: callable):
+        """Inicia long-polling para portapapeles y heartbeat."""
+        self.is_listening = True
+        _errors = [0]
+
         def loop():
-            while self.is_syncing:
-                if not self.connected: 
-                    time.sleep(5)
-                    continue
+            url = f"{self.base_url}/clipboard/poll?token={self.token}"
+            hb_url = f"{self.base_url}/handshake?token={self.token}"
+            while self.is_listening:
                 try:
-                    # 1. Verificar versión en servidor
-                    url = f"{self.base_url}/sync/status?token={self.token}"
-                    with urllib.request.urlopen(url, timeout=10) as resp:
+                    with urllib.request.urlopen(url, timeout=35) as resp:
+                        _errors[0] = 0
                         if resp.status == 200:
-                            data = json.loads(resp.read().decode())
-                            remote_v = data.get("v", "0")
-                            if remote_v != self.last_db_version:
-                                ic(f"SYNC: Cambio detectado! Local(v{self.last_db_version}) -> Remote(v{remote_v})")
-                                vault = self.download_vault()
-                                if vault:
-                                    on_vault(vault)
-                                    self.last_db_version = remote_v
-                except Exception as e:
-                    ic(f"Error in sync loop: {e}")
-                    self.connected = False
-                    if self.on_status_change: self.on_status_change("offline")
-                
-                time.sleep(4) # Polling cada 4 segundos
+                            raw = json.loads(resp.read().decode())
+                            decrypted = self.encryptor.decrypt(raw["data"])
+                            if decrypted:
+                                if self.on_clipboard_global:
+                                    self.on_clipboard_global(decrypted)
+                                elif on_receive:
+                                    on_receive(decrypted)
+                except Exception:
+                    if not self.is_listening:
+                        break
+                    _errors[0] += 1
+                    if _errors[0] >= 3:
+                        try:
+                            urllib.request.urlopen(hb_url, timeout=3)
+                            _errors[0] = 0
+                        except Exception:
+                            ic("Servidor no responde. Marcando desconectado.")
+                            self.is_listening = False
+                            self.connected = False
+                            if self.on_disconnect:
+                                self.on_disconnect()
+                            break
+                    time.sleep(2)
 
         threading.Thread(target=loop, daemon=True).start()
 
-    def upload_vault(self, vault_data_b64: str) -> bool:
-        """Envía la bóveda local al PC (Sincronización reversa)."""
-        if not self.connected: return False
+    def start_auto_sync_loop(self, db, auth_key, interval: int = 30):
+        """Descarga cambios periódicamente y los fusiona."""
+        if getattr(self, '_auto_sync_running', False):
+            return
+            
+        self._auto_sync_running = True
+        
+        def loop():
+            url = f"{self.base_url}/sync?token={self.token}"
+            while self._auto_sync_running and self.connected:
+                try:
+                    # Traemos toda la bóveda periódicamente
+                    import urllib.request
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            encrypted = resp.read().decode("utf-8")
+                            vault_str = self.encryptor.decrypt(encrypted)
+                            if vault_str:
+                                data_list = json.loads(vault_str)
+                                ins, upd, skp = db.import_from_list(data_list, auth_key)
+                                if (ins > 0 or upd > 0) and self.on_vault_sync:
+                                    self.on_vault_sync(ins, upd)
+                except Exception as e:
+                    ic(f"Error en auto-sync background: {e}")
+                
+                # Dormimos el intervalo en picos pequeños para poder abortar si se desconecta
+                for _ in range(interval * 2):
+                    if not self._auto_sync_running or not self.connected:
+                        break
+                    time.sleep(0.5)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def push_to_server_raw(self, data_list: list[dict]) -> bool:
+        """Envía una lista de contraseñas descifradas al PC.
+        
+        El servidor espera: POST /sync/upload?token=<token>
+        Body JSON: {"data": "<encrypted_json_string>"}
+        """
+        if not self.connected or not self.encryptor:
+            ic("push_to_server_raw: sin conexión activa.")
+            return False
         try:
             url = f"{self.base_url}/sync/upload?token={self.token}"
-            encrypted_data = self.encryptor.encrypt(vault_data_b64)
-            
+            payload_str = json.dumps(data_list, ensure_ascii=False)
+            encrypted = self.encryptor.encrypt(payload_str)
+            body = json.dumps({"data": encrypted}).encode("utf-8")
+
             req = urllib.request.Request(
-                url, 
-                data=encrypted_data.encode(),
-                headers={'Content-Type': 'application/octet-stream'}
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return resp.status == 200
         except Exception as e:
-            ic(f"Error al subir cambios al PC: {e}")
+            ic(f"Error en push_to_server_raw: {e}")
             return False
 
-    def stop_all(self):
-        """Detiene todos los hilos de monitoreo."""
+    def push_clipboard(self, text: str) -> bool:
+        """Envía texto al portapapeles del PC de forma bidireccional."""
+        if not self.connected or not self.encryptor:
+            return False
+        try:
+            url = f"{self.base_url}/clipboard/push?token={self.token}"
+            encrypted = self.encryptor.encrypt(text)
+            body = json.dumps({"data": encrypted}).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status == 200
+        except Exception as e:
+            ic(f"Error en push_clipboard: {e}")
+            return False
+
+    def stop_listener(self):
         self.is_listening = False
-        self.is_syncing = False
+        self._auto_sync_running = False
         self.connected = False
 
+
+# ------------------------------------------------------------------ #
+#  Test de cifrado
+# ------------------------------------------------------------------ #
 if __name__ == "__main__":
-    # Test rápido de cifrado
     enc = SessionEncryptor(os.urandom(32))
     original = "Secret Password 123"
     pkg = enc.encrypt(original)

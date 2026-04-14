@@ -18,19 +18,23 @@ class DatabaseManager:
     def __init__(self, db_path: str | None = None):
         ic("DATABASE INIT: Starting DatabaseManager initialization...")
         if db_path is None:
-            from pathlib import Path
-            # En Android, flet provee esta variable para almacenamiento persistente de la app.
+            # En Android (o empaquetado Flet), el directorio de la app es de SOLO LECTURA.
+            # Debemos usar la variable garantizada de escritura de Flet:
             app_storage = os.environ.get("FLET_APP_STORAGE_DATA")
-            
             if app_storage:
-                base_dir = Path(app_storage)
+                db_path = os.path.join(app_storage, "vault.db")
+                ic(f"DATABASE INIT: Android/Flet Storage Detected -> {db_path}")
             else:
                 # Ruta persistente en Windows (AppData/Local/KeyVault)
+                import sys
+                from pathlib import Path
                 base_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "KeyVault"
+                base_dir.mkdir(parents=True, exist_ok=True)
                 
-            base_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(base_dir / "vault.db")
-            ic(f"DATABASE INIT: Storage Path -> {db_path}")
+                # Aislamos la base de datos si estamos haciendo pruebas como celular local
+                db_name = "vault_mobile_test.db" if "--mobile" in sys.argv else "vault.db"
+                db_path = str(base_dir / db_name)
+                ic(f"DATABASE INIT: Windows/Local Persistent Storage -> {db_path}")
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
 
@@ -47,7 +51,7 @@ class DatabaseManager:
                 ic(f"DATABASE CONNECT: Directory {db_dir} does not exist. Creating it...")
                 os.makedirs(db_dir, exist_ok=True)
                 
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             ic("DATABASE CONNECT: Connection successful. Setting pragmas...")
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA foreign_keys = ON")
@@ -55,8 +59,15 @@ class DatabaseManager:
             self.conn.executescript(SCHEMA_SQL)
             ic("DATABASE CONNECT: Migrating temp passwords...")
             self.migrate_temp_passwords()
+            ic("DATABASE CONNECT: Migrating sync_id...")
+            self.migrate_sync_id()
             ic("DATABASE CONNECT: Seeding categories...")
             self.seed_categories()
+            
+            # Inicializar versión de sincronización si no existe
+            if self.get_config("sync_version") is None:
+                self.set_config("sync_version", "0")
+                
             self.conn.commit()
             ic("DATABASE CONNECT: Database ready.")
         except sqlite3.OperationalError as e:
@@ -74,6 +85,26 @@ class DatabaseManager:
             # La columna ya existe
             pass
 
+    def migrate_sync_id(self):
+        """Añade la columna 'sync_id' a passwords si no existe y le asigna UUIDs."""
+        import uuid
+        try:
+            self.conn.execute("ALTER TABLE passwords ADD COLUMN sync_id TEXT")
+            # Crear índice único en lugar de forzarlo en el ALTER TABLE (SQLite constraint limitation)
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_password_sync_id ON passwords(sync_id)")
+            
+            # Asignar UUIDs a los registros existentes
+            cur = self.conn.execute("SELECT id FROM passwords WHERE sync_id IS NULL")
+            rows = cur.fetchall()
+            for row in rows:
+                self.conn.execute("UPDATE passwords SET sync_id = ? WHERE id = ?", (uuid.uuid4().hex, row["id"]))
+            self.conn.commit()
+            ic("DATABASE: Migrated passwords to include sync_id.")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                ic(f"DATABASE: sqlite3.OperationalError during migrate_sync_id: {e}")
+            pass
+
     def close(self):
         if self.conn:
             self.conn.close()
@@ -88,24 +119,39 @@ class DatabaseManager:
                 DEFAULT_CATEGORIES,
             )
 
+    def _increment_version(self):
+        """Incrementa la versión de la base de datos para notificar cambios por red."""
+        try:
+            v_str = self.get_config("sync_version") or "0"
+            new_v = int(v_str) + 1
+            self.set_config("sync_version", str(new_v))
+            ic(f"DATABASE: Version incremented to {new_v}")
+        except Exception as e:
+            ic(f"Error incrementing sync version: {e}")
+
     # ------------------------------------------------------------------ #
     #  CRUD - Contraseñas
     # ------------------------------------------------------------------ #
     def add_password(self, title: str, username: bytes, password: bytes,
                      url: str = "", category_id: int = 8, notes: bytes = b"",
-                     is_favorite: int = 0, password_rules: dict | None = None) -> int:
+                     is_favorite: int = 0, password_rules: dict | None = None,
+                     sync_id: str | None = None) -> int:
         """Crea un registro de contraseña. Devuelve el ID insertado."""
+        import uuid
         now = datetime.now().isoformat()
         rules_json = json.dumps(password_rules or {})
+        s_id = sync_id or uuid.uuid4().hex
+        
         cur = self.conn.execute(
             """INSERT INTO passwords
-               (title, username, password, url, category_id, notes,
+               (sync_id, title, username, password, url, category_id, notes,
                 is_favorite, password_rules, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (title, username, password, url, category_id, notes,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (s_id, title, username, password, url, category_id, notes,
              is_favorite, rules_json, now, now),
         )
         self.conn.commit()
+        self._increment_version()
         return cur.lastrowid
 
     def get_all_passwords(self) -> list[dict]:
@@ -129,7 +175,9 @@ class DatabaseManager:
 
     def update_password(self, pw_id: int, **fields) -> None:
         """Actualiza los campos indicados de una contraseña."""
-        fields["updated_at"] = datetime.now().isoformat()
+        # Solo asignar updated_at automático si no viene en los fields
+        if "updated_at" not in fields:
+            fields["updated_at"] = datetime.now().isoformat()
         if "password_rules" in fields and isinstance(fields["password_rules"], dict):
             fields["password_rules"] = json.dumps(fields["password_rules"])
         set_clause = ", ".join(f"{k} = ?" for k in fields)
@@ -138,10 +186,47 @@ class DatabaseManager:
             f"UPDATE passwords SET {set_clause} WHERE id = ?", values
         )
         self.conn.commit()
+        self._increment_version()
+
+    def upsert_from_bridge(self, title: str, username: bytes, password: bytes,
+                           url: str, category_id: int, notes: bytes,
+                           is_favorite: int, remote_updated_at: str,
+                           existing_id: int | None = None) -> str:
+        """Inserta o actualiza una contraseña desde sincronización del Bridge.
+        Preserva el updated_at original del PC para que las próximas sincronizaciones
+        puedan comparar correctamente los timestamps.
+        Devuelve: 'inserted' | 'updated' | 'skipped'
+        """
+        now = datetime.now().isoformat()
+        remote_ts = remote_updated_at or now
+
+        if existing_id is None:
+            # Nuevo registro
+            self.conn.execute(
+                """INSERT INTO passwords
+                   (title, username, password, url, category_id, notes,
+                    is_favorite, password_rules, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, username, password, url, category_id, notes,
+                 is_favorite, json.dumps({}), now, remote_ts),
+            )
+            self.conn.commit()
+            return "inserted"
+        else:
+            # Actualizar — preservar el timestamp remoto para futuras comparaciones
+            self.conn.execute(
+                """UPDATE passwords
+                   SET username=?, password=?, url=?, notes=?, is_favorite=?, updated_at=?
+                   WHERE id=?""",
+                (username, password, url, notes, is_favorite, remote_ts, existing_id),
+            )
+            self.conn.commit()
+            return "updated"
 
     def delete_password(self, pw_id: int) -> None:
         self.conn.execute("DELETE FROM passwords WHERE id = ?", (pw_id,))
         self.conn.commit()
+        self._increment_version()
 
     def search_passwords(self, query: str) -> list[dict]:
         """Busca contraseñas por título (texto plano)."""
@@ -164,6 +249,89 @@ class DatabaseManager:
         )
         return {row["category_id"]: row["cnt"] for row in cur.fetchall()}
 
+    def import_from_list(self, data_list: list[dict], master_key: bytes) -> tuple[int, int, int]:
+        """Importación inteligente bidireccional (Sincronización PC-Móvil) usando UUID (sync_id) y timestamps."""
+        from security.crypto import encrypt, decrypt
+        
+        current_passwords = self.get_all_passwords()
+        
+        inserted = 0
+        updated = 0
+        skipped = 0
+
+        all_cats = self.get_all_categories()
+        valid_ids = [c["id"] for c in all_cats]
+
+        for item in data_list:
+            cat_id = item.get("category_id", 8)
+            if cat_id not in valid_ids: cat_id = 8
+
+            title = item.get("title", "Sincronizado")
+            u_plain = item.get("username", "")
+            p_plain = item.get("password", "")
+            n_plain = item.get("notes", "")
+            url = item.get("url", "")
+            sync_id = item.get("sync_id", "")
+            remote_ts = item.get("updated_at") or ""
+            is_fav = item.get("is_favorite", 0)
+
+            # 1. Buscar coincidencia local
+            match = None
+            if sync_id:
+                for lp in current_passwords:
+                    if lp.get("sync_id") == sync_id:
+                        match = lp
+                        break
+            
+            # Fallback a título y usuario
+            if not match:
+                for lp in current_passwords:
+                    try:
+                        lp_user = decrypt(lp["username"], master_key) if lp["username"] else ""
+                    except: lp_user = ""
+                    if lp.get("title") == title and lp_user == u_plain and lp.get("category_id") == cat_id:
+                        match = lp
+                        break
+
+            enc_user = encrypt(u_plain, master_key)
+            enc_pass = encrypt(p_plain, master_key)
+            enc_note = encrypt(n_plain, master_key) if n_plain else b""
+
+            local_ts = (match.get("updated_at") or "") if match else ""
+
+            if match is None:
+                self.add_password(
+                    title=title, username=enc_user, password=enc_pass,
+                    url=url, notes=enc_note, category_id=cat_id,
+                    is_favorite=is_fav, sync_id=sync_id or None
+                )
+                
+                # El record recién insertado usará now() local, así que actualizamos
+                # explícitamente su updated_at al valor remoto.
+                inserted_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                if remote_ts:
+                    self.conn.execute("UPDATE passwords SET updated_at=? WHERE id=?", (remote_ts, inserted_id))
+                
+                inserted += 1
+            elif remote_ts > local_ts:
+                pw_id = match["id"]
+                self.conn.execute(
+                    """UPDATE passwords 
+                       SET title=?, username=?, password=?, url=?, notes=?, 
+                           category_id=?, is_favorite=?, updated_at=?
+                       WHERE id=?""",
+                    (title, enc_user, enc_pass, url, enc_note, 
+                     cat_id, is_fav, remote_ts, pw_id)
+                )
+                updated += 1
+            else:
+                skipped += 1
+                
+        self.conn.commit()
+        if inserted > 0 or updated > 0:
+            self._increment_version()
+        return inserted, updated, skipped
+
     # ------------------------------------------------------------------ #
     #  CRUD - Categorías
     # ------------------------------------------------------------------ #
@@ -178,6 +346,7 @@ class DatabaseManager:
             (name, icon, color),
         )
         self.conn.commit()
+        self._increment_version()
         return cur.lastrowid
 
     def delete_category(self, cat_id: int) -> None:
@@ -187,6 +356,7 @@ class DatabaseManager:
         )
         self.conn.execute("DELETE FROM categories WHERE id = ? AND is_custom = 1", (cat_id,))
         self.conn.commit()
+        self._increment_version()
 
     # ------------------------------------------------------------------ #
     #  Preguntas de seguridad
@@ -256,4 +426,50 @@ class DatabaseManager:
     def delete_temp_password(self, temp_id: int) -> None:
         """Elimina una contraseña temporal por su ID."""
         self.conn.execute("DELETE FROM temp_passwords WHERE id = ?", (temp_id,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ #
+    #  Gestión de Dispositivos de Confianza (Sync P2P)
+    # ------------------------------------------------------------------ #
+    def register_trusted_device(self, device_id: str, name: str, token: str):
+        """Registra un dispositivo y mantiene solo los últimos 5."""
+        now = datetime.now().isoformat()
+        # Eliminar si ya existe para actualizar
+        self.conn.execute("DELETE FROM trusted_sync_devices WHERE device_id = ?", (device_id,))
+        
+        # Insertar nuevo
+        self.conn.execute(
+            """INSERT INTO trusted_sync_devices 
+               (device_id, device_name, trust_token, last_connected, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (device_id, name, token, now, now)
+        )
+        
+        # Mantener solo 5 (los más recientes por conexión)
+        self.conn.execute(
+            """DELETE FROM trusted_sync_devices 
+               WHERE id NOT IN (
+                   SELECT id FROM trusted_sync_devices 
+                   ORDER BY last_connected DESC LIMIT 5
+               )"""
+        )
+        self.conn.commit()
+
+    def get_trusted_device(self, device_id: str) -> dict | None:
+        cur = self.conn.execute(
+            "SELECT * FROM trusted_sync_devices WHERE device_id = ?", (device_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def list_trusted_devices(self) -> list[dict]:
+        cur = self.conn.execute("SELECT * FROM trusted_sync_devices ORDER BY last_connected DESC")
+        return [dict(row) for row in cur.fetchall()]
+
+    def update_device_connection(self, device_id: str):
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE trusted_sync_devices SET last_connected = ? WHERE device_id = ?",
+            (now, device_id)
+        )
         self.conn.commit()

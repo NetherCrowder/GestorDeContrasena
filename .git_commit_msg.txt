@@ -1,0 +1,5 @@
+fix(android): resolución de crasheos nativos en Flet (Permisos y FastAPI)
+
+- Storage Persistente (Android): Utilizado FLET_APP_STORAGE_DATA para evitar intentar crear archivos de logs (.txt) o configuración en la carpeta inescribible /data/ o /home/ de Linux/Android.
+- Aislamiento de Librerías "Server-side": Encapsuladas las importaciones de fastapi y uvicorn dentro class BridgeServer usando importaciones interiores ("lazy loading"). Esto previno que el Mobile Client Android arrojara ModuleNotFoundError al no compilar componentes en Rust de Pydantic.
+- Detección Dinámica de Plataforma: Implementado `is_mobile = page.platform` junto con sys.argv para detectar realmente si nos encontramos en el framework Android y evitar crear instancias innecesarias del Servidor en el celular.

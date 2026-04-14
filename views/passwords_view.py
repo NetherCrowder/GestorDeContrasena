@@ -107,9 +107,12 @@ class PasswordsView:
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
             
-            # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, username)
-            
+            # Copiar al portapapeles local
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, username)
+            # Push global al PC si está conectado
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(username)
             # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon
@@ -132,9 +135,12 @@ class PasswordsView:
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
             
-            # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, password)
-            
+            # Copiar al portapapeles local
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, password)
+            # Push global al PC si está conectado
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(password)
             # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon
@@ -251,38 +257,124 @@ class PasswordsView:
         self.page.update()
 
     def open_push_menu(self, pw_id):
-        """Abre un diálogo para elegir qué enviar al móvil."""
+        """Diálogo para enviar usuario O contraseña a un dispositivo específico o a todos."""
         if not self.bridge_server.is_running:
-            self.show_snackbar("El Puente KeyVault no está activo. Inícialo en Ajustes.")
+            self.show_snackbar("⚠️ El Puente KeyVault no está activo.")
             return
 
         pw = self.db.get_password_by_id(pw_id)
-        if not pw: return
+        if not pw:
+            return
 
-        def send(field_name):
-            try:
-                val_enc = pw.get(field_name)
-                if val_enc:
-                    from security.crypto import decrypt
-                    val = decrypt(val_enc, self.auth.key)
-                    self.bridge_server.push_clipboard(val)
-                    self.show_snackbar(f"✅ {'Usuario' if field_name == 'username' else 'Clave'} enviado al móvil.")
-                dialog.open = False
-                self.page.update()
-            except Exception as ex:
-                register_error("Error in clipboard push", ex)
-                self.show_snackbar("❌ Error al enviar.")
+        from security.crypto import decrypt
+        import time
+
+        now = time.time()
+        active_devices = [
+            (did, info) for did, info in self.bridge_server.connected_clients.items()
+            if now - info.get("last_seen", 0) < 45
+        ]
+
+        user_btn = ft.OutlinedButton(
+            "Enviar Usuario",
+            icon=ft.Icons.PERSON_OUTLINED,
+            style=ft.ButtonStyle(color=ft.Colors.CYAN_300),
+        )
+        pass_btn = ft.OutlinedButton(
+            "Enviar Contraseña",
+            icon=ft.Icons.KEY_OUTLINED,
+            style=ft.ButtonStyle(color=ft.Colors.AMBER_300),
+        )
+        status_text = ft.Text("", size=12, color=ft.Colors.GREEN_300)
+
+        device_options = [ft.dropdown.Option(key="all", text="📡 Todos los dispositivos")]
+        for did, info in active_devices:
+            name = info.get("device_name", "Móvil")
+            ip = info.get("ip", "?")
+            device_options.append(ft.dropdown.Option(key=did, text=f"📱 {name} ({ip})"))
+
+        device_dd = ft.Dropdown(
+            label="Dispositivo de destino",
+            options=device_options,
+            value="all",
+            bgcolor="#263548",
+            border_color=ft.Colors.CYAN_700,
+            width=320,
+            visible=bool(active_devices),
+        )
+
+        no_device_text = ft.Text(
+            "⚠️ No hay dispositivos conectados en este momento.",
+            size=13, color=ft.Colors.AMBER_300,
+            visible=not bool(active_devices)
+        )
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Enviar al móvil", size=16, weight=ft.FontWeight.BOLD),
-            content=ft.Text("¿Qué dato deseas copiar?", size=14),
+            title=ft.Row([
+                ft.Icon(ft.Icons.SEND_TO_MOBILE, color=ft.Colors.CYAN),
+                ft.Text("Enviar al Móvil", size=16, weight=ft.FontWeight.BOLD),
+            ]),
             bgcolor="#1e2a3a",
-            actions=[
-                ft.TextButton("Usuario", on_click=lambda _: send("username")),
-                ft.TextButton("Clave", on_click=lambda _: send("password")),
-                ft.TextButton("Cancelar", on_click=lambda e: setattr(dialog, "open", False) or self.page.update()),
-            ]
+            content=ft.Column([
+                ft.Text(
+                    f"Contraseña: {pw.get('title', '?')}",
+                    size=13, color=ft.Colors.WHITE60
+                ),
+                ft.Divider(color=ft.Colors.WHITE10),
+                ft.Text("¿Qué dato deseas enviar?", size=13, color=ft.Colors.WHITE70),
+                ft.Row([user_btn, pass_btn], wrap=True, spacing=8),
+                ft.Container(height=4),
+                device_dd,
+                no_device_text,
+                status_text,
+            ], tight=True, spacing=10, width=340),
+            actions_alignment=ft.MainAxisAlignment.END,
         )
+
+        def _send(field_name: str):
+            try:
+                val_enc = pw.get(field_name)
+                if not val_enc:
+                    status_text.value = "❌ Campo vacío."
+                    self.page.update()
+                    return
+
+                val = decrypt(val_enc, self.auth.key)
+                target = device_dd.value if active_devices else "all"
+                label = "Usuario" if field_name == "username" else "Contraseña"
+
+                if target == "all":
+                    self.bridge_server.push_clipboard(val)
+                    dest_name = "todos los dispositivos"
+                else:
+                    ok = self.bridge_server.push_to_device(target, val)
+                    info = self.bridge_server.connected_clients.get(target, {})
+                    dest_name = info.get("device_name", target)
+                    if not ok:
+                        status_text.value = f"❌ Dispositivo '{dest_name}' no responde."
+                        self.page.update()
+                        return
+
+                status_text.value = f"✅ {label} enviado a {dest_name}."
+                self.page.update()
+            except Exception as ex:
+                from utils.logging_config import register_error
+                register_error("Error en push", ex)
+                status_text.value = "❌ Error al enviar."
+                self.page.update()
+
+        user_btn.on_click = lambda _: _send("username")
+        pass_btn.on_click = lambda _: _send("password")
+
+        close_btn = ft.TextButton(
+            "Cerrar",
+            on_click=lambda _: (
+                setattr(dialog, "open", False),
+                self.page.update()
+            )
+        )
+        dialog.actions = [close_btn]
+
         self.page.overlay.append(dialog)
         dialog.open = True
         self.page.update()

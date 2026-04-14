@@ -3,3 +3,6 @@ icecream
 pyinstaller
 qrcode
 Pillow
+fastapi
+uvicorn
+zeroconf

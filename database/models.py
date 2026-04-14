@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS categories (
 
 CREATE TABLE IF NOT EXISTS passwords (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_id         TEXT    UNIQUE,
     title           TEXT    NOT NULL,
     username        BLOB,
     password        BLOB    NOT NULL,
@@ -43,6 +44,15 @@ CREATE TABLE IF NOT EXISTS temp_passwords (
     password    BLOB    NOT NULL,
     name        TEXT    DEFAULT 'Sin nombre',
     created_at  TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trusted_sync_devices (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id       TEXT UNIQUE NOT NULL,
+    device_name     TEXT    NOT NULL,
+    trust_token     TEXT    NOT NULL,
+    last_connected  TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL
 );
 """
 

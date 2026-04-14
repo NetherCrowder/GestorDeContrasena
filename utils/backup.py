@@ -6,6 +6,7 @@ Implementa el sistema de "Cerradura Binaria" (Contenido cifrado + Header bloquea
 import json
 import base64
 import os
+from icecream import ic
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -201,6 +202,7 @@ def export_passwords_to_bytes(passwords: list[dict], auth_key: bytes, question: 
                 p_enc = pw.get("password")
                 n_enc = pw.get("notes")
                 item = {
+                    "sync_id": pw.get("sync_id") or "",
                     "title": pw.get("title", ""),
                     "username": decrypt_master(u_enc, auth_key) if u_enc else "",
                     "password": decrypt_master(p_enc, auth_key) if p_enc else "",
@@ -243,9 +245,20 @@ def get_backup_metadata(file_path: str) -> dict | None:
     """Abre el binario y devuelve el paquete interno (incluye la pregunta desofuscada)."""
     try:
         with open(file_path, "rb") as f:
-            o_salt = f.read(SALT_SIZE)
-            o_iv = f.read(IV_SIZE)
-            o_payload = f.read()
+            full_data = f.read()
+        return get_backup_metadata_from_bytes(full_data)
+    except Exception:
+        return None
+
+def get_backup_metadata_from_bytes(data: bytes) -> dict | None:
+    """Procesa un contenido binario (.vk) y devuelve el paquete interno."""
+    try:
+        if len(data) < SALT_SIZE + IV_SIZE:
+            return None
+            
+        o_salt = data[:SALT_SIZE]
+        o_iv = data[SALT_SIZE:SALT_SIZE+IV_SIZE]
+        o_payload = data[SALT_SIZE+IV_SIZE:]
             
         o_raw = decrypt_bytes(o_salt, o_iv, o_payload, APP_FIXED_KEY)
         if not o_raw: 
@@ -280,3 +293,135 @@ def import_passwords(inner_package: dict, answer: str) -> list[dict] | None:
         return json.loads(decrypted.decode("utf-8"))
     except Exception:
         return None
+
+# ------------------------------------------------------------------ #
+#  Funciones del Puente P2P (E2EE puro, sin capa de seguridad extra)
+# ------------------------------------------------------------------ #
+def export_passwords_bridge(passwords: list[dict], auth_key: bytes) -> str | None:
+    """
+    Serializa las contraseñas en JSON plano para transmisión via Bridge P2P.
+    El canal ya es E2EE por lo que NO se aplica cifrado adicional aquí.
+    Retorna un string JSON base64 listo para enviar.
+    """
+    try:
+        decrypted_list = []
+        for pw in passwords:
+            try:
+                u_enc = pw.get("username")
+                p_enc = pw.get("password")
+                n_enc = pw.get("notes")
+                item = {
+                    "sync_id": pw.get("sync_id") or "",
+                    "title": pw.get("title", ""),
+                    "username": decrypt_master(u_enc, auth_key) if u_enc else "",
+                    "password": decrypt_master(p_enc, auth_key) if p_enc else "",
+                    "url": pw.get("url", ""),
+                    "notes": decrypt_master(n_enc, auth_key) if n_enc else "",
+                    "category_id": pw.get("category_id", 8),
+                    "is_favorite": pw.get("is_favorite", 0),
+                    "created_at": pw.get("created_at"),
+                    "updated_at": pw.get("updated_at"),
+                }
+                decrypted_list.append(item)
+            except Exception:
+                continue
+
+        # Retornar JSON plano. El BridgeServer se encargará de cifrarlo con la SessionKey (AES-CTR)
+        return json.dumps(decrypted_list, ensure_ascii=False)
+    except Exception as e:
+        ic(f"Error en export_passwords_bridge: {e}")
+        return None
+
+
+def apply_bridge_vault(vault_b64: str, db, auth_key: bytes) -> tuple[int, int, int]:
+    """
+    Aplica una bóveda recibida via Bridge al almacén local del móvil.
+    Estrategia de fusión:
+      - Si el registro (mismo title + username + category_id) NO existe → lo inserta.
+      - Si EXISTE → compara updated_at y actualiza solo si el del PC es más reciente.
+    Retorna (insertados, actualizados, saltados).
+    """
+    from icecream import ic
+    try:
+        raw = base64.b64decode(vault_b64).decode("utf-8")
+        payload = json.loads(raw)
+        ic(f"apply_bridge_vault: formato={payload.get('fmt')}, registros={len(payload.get('data', []))}")
+        
+        if payload.get("fmt") != "bridge_v1":
+            ic("apply_bridge_vault: formato no reconocido, abortando")
+            return 0, 0, 0
+        
+        incoming = payload["data"]
+        from security.crypto import encrypt as encrypt_master
+        
+        inserted = 0
+        updated = 0
+        skipped = 0
+
+        # Cargar TODOS los registros locales una sola vez (más eficiente)
+        all_local = db.get_all_passwords()
+
+        for item in incoming:
+            title = item.get("title", "")
+            username_plain = item.get("username", "")
+            category_id = item.get("category_id", 8)
+            updated_at_remote = item.get("updated_at") or ""
+            sync_id = item.get("sync_id", "")
+
+            # Buscar coincidencia local por sync_id, o (title + username)
+            match = None
+            if sync_id:
+                for ex in all_local:
+                    if ex.get("sync_id") == sync_id:
+                        match = ex
+                        break
+
+            if not match:
+                for ex in all_local:
+                    try:
+                        ex_username = decrypt_master(ex.get("username"), auth_key) if ex.get("username") else ""
+                    except Exception:
+                        ex_username = ""
+                    if ex.get("title") == title and ex_username == username_plain:
+                        match = ex
+                        break
+
+            # Re-cifrar con la clave del móvil
+            u_enc = encrypt_master(item.get("username", ""), auth_key)
+            p_enc = encrypt_master(item.get("password", ""), auth_key)
+            n_enc = encrypt_master(item.get("notes", ""), auth_key) if item.get("notes") else b""
+
+            local_ts = (match.get("updated_at") or "") if match else ""
+
+            if match is None:
+                # Nuevo: insertar preservando el timestamp del PC
+                result = db.upsert_from_bridge(
+                    title=title, username=u_enc, password=p_enc,
+                    url=item.get("url", ""), category_id=category_id,
+                    notes=n_enc, is_favorite=item.get("is_favorite", 0),
+                    remote_updated_at=updated_at_remote,
+                )
+                inserted += 1
+                ic(f"INSERT: {title!r} ts={updated_at_remote!r}")
+            elif updated_at_remote > local_ts:
+                # Actualizar: registro más nuevo en PC → reemplazar y guardar ts remoto
+                result = db.upsert_from_bridge(
+                    title=title, username=u_enc, password=p_enc,
+                    url=item.get("url", ""), category_id=category_id,
+                    notes=n_enc, is_favorite=item.get("is_favorite", 0),
+                    remote_updated_at=updated_at_remote,
+                    existing_id=match["id"],
+                )
+                updated += 1
+                ic(f"UPDATE: {title!r} remote={updated_at_remote!r} > local={local_ts!r}")
+            else:
+                skipped += 1
+                # ic(f"SKIP: {title!r} remote={updated_at_remote!r} local={local_ts!r}")
+
+        ic(f"apply_bridge_vault: RESULTADO ins={inserted}, upd={updated}, skp={skipped}")
+        return inserted, updated, skipped
+    except Exception as e:
+        from icecream import ic
+        ic(f"apply_bridge_vault ERROR: {e}")
+        import traceback; traceback.print_exc()
+        return 0, 0, 0
