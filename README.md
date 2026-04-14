@@ -1,69 +1,31 @@
-# Gestordecontrasena app
+# KeyVault - Edición Móvil (Cliente)
 
-## Run the app
+KeyVault es un gestor de contraseñas de máxima seguridad, 100% offline, diseñado para proteger tu información mediante criptografía de grado militar (AES-256 EtM). 
 
-### uv
+Esta rama contiene exclusivamente el cliente de **Móvil (Android/iOS)**. A diferencia de un gestor de contraseñas convencional donde los datos rebotan a través de servidores de terceros (AWS/Azure), este cliente interactúa P2P a través de la Red LAN directamente a tu PC de escritorio gracias al protocolo mDNS/AutoBridge.
 
-Run as a desktop app:
+## ✨ Características Principales
+- **Cifrado Real Offline:** Tu bóveda base nunca sale de tus dispositivos locales hacia Internet.
+- **Detección Silenciosa (ZeroConf):** Descubre, valida y autentica tu conexión a tu Desktop PC (BridgeServer) de forma transparente mediante Wi-Fi Local.
+- **Native Clipboard Push:** Cualquier contraseña que veas en tu teléfono puede incrustarse de forma transparente en el portapapeles global de la computadora remota (Tu PC) mediante 1 toque, útil para rellenar SmartTVs o Formularios en el Desktop.
+- **Portabilidad Limpia:** Esta rama ha sido podada de cualquier librería de Host Web o de Desktop para mantener el bloque generador del APK bajo un peso mínimo y rendimiento máximo de UI en Flutter/Flet.
 
+## 🚀 Empezando
+
+### Requisitos
+- Android Device / Emulador o iOS con la app oficial de Flet.
+- SDKs Android configurados y dependencias resueltas.
+
+### Construcción
+Asegúrate de preparar tú entorno antes de compilar para móviles:
 ```bash
-uv run flet run
-```
-
-Run as a web app:
-
-```bash
-uv run flet run --web
-```
-
-For more details on running the app, refer to the [Getting Started Guide](https://docs.flet.dev/).
-
-## Build the app
-
-### Android
-
-```bash
+# Compilar Archivo APK para Android
 flet build apk -v
 ```
 
-For more details on building and signing `.apk` or `.aab`, refer to the [Android Packaging Guide](https://docs.flet.dev/publish/android/).
+*(Importante: Si usas Windows para construir, OneDrive u otros sincronizadores en la nube deben pausarse sobre la carpeta de tu Workspace para evitar que Gradle falle).*
 
-### iOS
-
-```bash
-flet build ipa -v
-```
-
-For more details on building and signing `.ipa`, refer to the [iOS Packaging Guide](https://docs.flet.dev/publish/ios/).
-
-### macOS
-
-```bash
-flet build macos -v
-```
-
-For more details on building macOS package, refer to the [macOS Packaging Guide](https://docs.flet.dev/publish/macos/).
-
-### Linux
-
-```bash
-flet build linux -v
-```
-
-For more details on building Linux package, refer to the [Linux Packaging Guide](https://docs.flet.dev/publish/linux/).
-
-### Windows
-
-```bash
-flet build windows -v
-```
-
-For more details on building Windows package, refer to the [Windows Packaging Guide](https://docs.flet.dev/publish/windows/).
-
-### Web
-
-```bash
-flet build web -v
-```
-
-For more details on building Web app, refer to the [Web Packaging Guide](https://docs.flet.dev/publish/web/).
+## 📚 Documentación
+- `docs/MOBILE_DOCS.md`: Infraestructura de cliente ligero, zero-config y payload push.
+- `docs/USER_GUIDE.md`: Manual del usuario (Enfocado en la perspectiva Móvil).
+- `docs/ARCHITECTURE.md`: Análisis técnico e integraciones AES-256.
