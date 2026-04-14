@@ -107,9 +107,12 @@ class PasswordsView:
         if pw and pw.get("username"):
             username = decrypt(pw["username"], self.auth.key)
             
-            # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, username)
-            
+            # Copiar al portapapeles local
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, username)
+            # Push global al PC si está conectado
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(username)
             # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon
@@ -132,9 +135,12 @@ class PasswordsView:
         if pw and pw.get("password"):
             password = decrypt(pw["password"], self.auth.key)
             
-            # Copiar al portapapeles
-            self.page.run_task(self.page.clipboard.set, password)
-            
+            # Copiar al portapapeles local
+            from utils.clipboard_helper import copy_to_clipboard
+            copy_to_clipboard(self.page, password)
+            # Push global al PC si está conectado
+            if hasattr(self, 'bridge_server') and self.bridge_server and hasattr(self.bridge_server, 'push_clipboard'):
+                self.bridge_server.push_clipboard(password)
             # Mostrar visualmente
             original_text = e.control.content
             original_icon = e.control.icon

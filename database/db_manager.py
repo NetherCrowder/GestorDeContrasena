@@ -89,7 +89,10 @@ class DatabaseManager:
         """Añade la columna 'sync_id' a passwords si no existe y le asigna UUIDs."""
         import uuid
         try:
-            self.conn.execute("ALTER TABLE passwords ADD COLUMN sync_id TEXT UNIQUE")
+            self.conn.execute("ALTER TABLE passwords ADD COLUMN sync_id TEXT")
+            # Crear índice único en lugar de forzarlo en el ALTER TABLE (SQLite constraint limitation)
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_password_sync_id ON passwords(sync_id)")
+            
             # Asignar UUIDs a los registros existentes
             cur = self.conn.execute("SELECT id FROM passwords WHERE sync_id IS NULL")
             rows = cur.fetchall()
@@ -97,7 +100,9 @@ class DatabaseManager:
                 self.conn.execute("UPDATE passwords SET sync_id = ? WHERE id = ?", (uuid.uuid4().hex, row["id"]))
             self.conn.commit()
             ic("DATABASE: Migrated passwords to include sync_id.")
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                ic(f"DATABASE: sqlite3.OperationalError during migrate_sync_id: {e}")
             pass
 
     def close(self):

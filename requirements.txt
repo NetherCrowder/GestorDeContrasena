@@ -5,3 +5,4 @@ qrcode
 Pillow
 fastapi
 uvicorn
+zeroconf

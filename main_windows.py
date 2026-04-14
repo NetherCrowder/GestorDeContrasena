@@ -122,7 +122,41 @@ def main(page: ft.Page):
                         return export_passwords_bridge(
                             db.get_all_passwords(), auth.key
                         )
+                        
+                    def _handle_incoming_vault(data_list):
+                        ins, upd, skp = db.import_from_list(data_list, auth.key)
+                        if ins > 0 or upd > 0:
+                            ic(f"[Sync] Bóveda recibida. Insertadas: {ins}, Actualizadas: {upd}")
+                            try:
+                                page.snack_bar = ft.SnackBar(ft.Text("🔄 Sincronizado desde el Móvil"), bgcolor=ft.Colors.GREEN_800)
+                                page.snack_bar.open = True
+                                page.update()
+                            except: pass
+                            
+                    bridge_server.on_vault_received = _handle_incoming_vault
                     bridge_server.start(vault_provider)
+                    
+                    # Recepción de portapapeles del móvil → puesto en el portapapeles de Windows
+                    def _on_mobile_clipboard(txt: str):
+                        ic(f"[Clipboard] Móvil → PC: {txt[:30]}...")
+                        try:
+                            import subprocess
+                            subprocess.run(
+                                ["powershell", "-command", f"Set-Clipboard -Value '{txt.replace(chr(39), '')}'"],
+                                capture_output=True
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            page.snack_bar = ft.SnackBar(
+                                ft.Text(f"📋 Portapapeles del Móvil: {txt[:40]}"),
+                                bgcolor=ft.Colors.BLUE_800
+                            )
+                            page.snack_bar.open = True
+                            page.update()
+                        except: pass
+                        
+                    bridge_server.start_clipboard_listener(on_receive=_on_mobile_clipboard)
                     ic("BridgeServer iniciado automáticamente tras login.")
                 except Exception as ex:
                     ic(f"Error iniciando bridge: {ex}")
