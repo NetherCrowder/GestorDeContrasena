@@ -18,6 +18,10 @@ import urllib.parse
 import queue
 import asyncio
 from icecream import ic
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
+from zeroconf import Zeroconf, ServiceInfo
 
 # Importación de pyaes (asumiendo que está en el root)
 import pyaes
@@ -95,7 +99,6 @@ class BridgeServer:
     """
     
     def __init__(self, port=DEFAULT_PORT):
-        from fastapi import FastAPI
         self.port = port
         self.uvicorn_server = None
         self.thread = None
@@ -231,8 +234,6 @@ class BridgeServer:
     #  Rutas HTTP (FastAPI)
     # ------------------------------------------------------------------ #
     def _setup_routes(self):
-        from fastapi import Request, Response, HTTPException
-        from fastapi.responses import JSONResponse
 
         # ----- Ruta de estado público (sin autenticación) -----
         @self.app.get("/")
@@ -495,7 +496,6 @@ class BridgeServer:
     # ------------------------------------------------------------------ #
     def start(self, vault_provider: callable):
         """Inicia el servidor y el ciclo de rotación de PIN."""
-        import uvicorn
         
         class NoSignalServer(uvicorn.Server):
             def install_signal_handlers(self):
@@ -509,7 +509,13 @@ class BridgeServer:
         self.client_queues.clear()
         
         # Servidor Uvicorn
-        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.port, log_level="error")
+        config = uvicorn.Config(
+            self.app, 
+            host="0.0.0.0", 
+            port=self.port, 
+            log_level="error",
+            log_config=None # Desactivar config interna para evitar crash en Windowed mode
+        )
         self.uvicorn_server = NoSignalServer(config=config)
         self.thread = threading.Thread(target=self.uvicorn_server.run, daemon=True)
         self.thread.start()
@@ -520,11 +526,7 @@ class BridgeServer:
         
         ip = self.get_local_ip()
 
-        # Iniciar zeroconf si está disponible
-        self._zeroconf = None
-        self._service_info = None
         try:
-            from zeroconf import Zeroconf, ServiceInfo
             import socket
             self._zeroconf = Zeroconf()
             hostname = socket.gethostname()

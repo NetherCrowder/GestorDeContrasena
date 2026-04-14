@@ -10,6 +10,14 @@ import traceback
 import flet as ft
 from icecream import ic
 from utils.logging_config import setup_logging, register_error
+from database.db_manager import DatabaseManager
+from security.auth import AuthManager
+from views.login_view import LoginView
+from views.dashboard_view import DashboardView
+from views.passwords_view import PasswordsView
+from views.change_password import ChangePasswordView
+from utils.sync_service import BridgeServer
+from utils.backup import export_passwords_bridge
 
 setup_logging()
 
@@ -38,15 +46,6 @@ def main(page: ft.Page):
         # ------------------------------------------------------------------ #
         #  Inicializar servicios
         # ------------------------------------------------------------------ #
-        from database.db_manager import DatabaseManager
-        from security.auth import AuthManager
-        from views.login_view import LoginView
-        from views.dashboard_view import DashboardView
-        from views.passwords_view import PasswordsView
-        from views.change_password import ChangePasswordView
-        from utils.sync_service import BridgeServer
-        from utils.backup import export_passwords_bridge
-
         db = DatabaseManager()
         db.connect()
         auth = AuthManager(db)
@@ -159,7 +158,17 @@ def main(page: ft.Page):
                     bridge_server.start_clipboard_listener(on_receive=_on_mobile_clipboard)
                     ic("BridgeServer iniciado automáticamente tras login.")
                 except Exception as ex:
+                    register_error(ex, "Error iniciando BridgeServer")
                     ic(f"Error iniciando bridge: {ex}")
+                    try:
+                        page.snack_bar = ft.SnackBar(
+                            ft.Text(f"❌ Error al iniciar Bridge: {str(ex)}"),
+                            bgcolor=ft.Colors.RED_800,
+                            duration=5000
+                        )
+                        page.snack_bar.open = True
+                        page.update()
+                    except: pass
 
         def post_login():
             """Acciones post-login: arrancar bridge y navegar."""

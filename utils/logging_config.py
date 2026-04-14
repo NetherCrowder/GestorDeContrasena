@@ -22,14 +22,18 @@ def setup_logging():
     base_dir.mkdir(parents=True, exist_ok=True)
     log_file = base_dir / "errors.log"
     
+    import sys
+    handlers = [logging.FileHandler(log_file)]
+    
+    # Solo añadir StreamHandler si hay una consola disponible (stdout/stderr no son None)
+    if sys.stderr is not None or sys.stdout is not None:
+        handlers.append(logging.StreamHandler())
+
     # Asegurar que el logger estándar escriba en un archivo
     logging.basicConfig(
         level=logging.ERROR,
         format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=handlers
     )
     
     # Mensaje de inicialización (solo en debug)
