@@ -51,7 +51,25 @@ Este documento detalla los escenarios principales de uso para KeyVault, demostra
 - Si el usuario responde correctamente al menos 3, se le permite definir una **nueva Contraseña Maestra**.
 - Los datos se re-cifran automáticamente con la nueva clave.
 
-## 7. Soporte Técnico y Logs
+## 7. AutoBridge: Sincronización Wifi Transparente
+**Actor**: Usuario de escritorio con un dispositivo Celular nuevo.
+**Objetivo**: Ligar la app Móvil para tener portabilidad de credenciales.
+- El usuario enciende su PC y accede a KeyVault.
+- Arranca la app de KeyVault en el Smartphone.
+- A través de *Zeroconf mDNS*, el teléfono detecta instantáneamente la IP de la computadora (`_keyvault._tcp.local.`).
+- El PC refleja en su menú un mensaje de Emparejamiento Seguro exhibiendo un **PIN numérico** y una **Clase Alfanumérica (Alpha)**.
+- El usuario lo ingresa en su teléfono y la confianza se establece permanentemente gracias a un `trust_token` local. Las veces posteriores, la unión se hará de espaldas e instantánea sin claves.
+
+## 8. Magia de Portapapeles Horizontal (Clipboard Push)
+**Actor**: Usuario emparejado con su celular trabajando.
+**Objetivo**: Pegar una contraseña de la TV (con el móvil) hacia la sesión de la computadora sin tener que abrir el cliente en PC.
+- El PC manda la base de datos a memoria del celular a través del Tunnel cifrado y las credenciales operan offline en el teléfono.
+- El usuario busca "Netflix" en el móvil y presiona el ícono de **Copiar (Push to PC)**.
+- El teléfono envía por `/clipboard/push` por red un string asimétricamente encriptado.
+- El BridgeServer en Windows lo desencripta y mediante el API `Get-Clipboard` / Flet, lo sitúa directo en el portapapeles global del sistema.
+- El usuario presiona `CRTL + V` en el televisor o en el ordenador remoto y pega su clave sin verla ni memorizarla.
+
+## 9. Soporte Técnico y Logs
 **Actor**: Usuario que experimenta un error.
 **Objetivo**: Proveer información para soporte.
 - El usuario encuentra un error inesperado.

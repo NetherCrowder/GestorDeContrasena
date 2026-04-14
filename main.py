@@ -1,6 +1,9 @@
 """
 KeyVault — Gestor de Contraseñas Personal
-Punto de entrada de la aplicación Flet (Ejecutable de Móvil).
+Punto de entrada de la aplicación Flet (Ejecutable de Windows).
+
+El BridgeServer se inicia automáticamente tras el login y se mantiene
+activo independientemente de la vista en pantalla.
 """
 
 import traceback
@@ -8,8 +11,8 @@ import flet as ft
 from icecream import ic
 from utils.logging_config import setup_logging, register_error
 
-# Inicializar logging
 setup_logging()
+
 
 def main(page: ft.Page):
     # ------------------------------------------------------------------ #
@@ -25,10 +28,9 @@ def main(page: ft.Page):
     page.padding = 0
     page.spacing = 0
 
-    # Simulación de móvil en Escritorio o ejecución nativa
-    page.window.width = 400
-    page.window.height = 750
-    page.window.resizable = False
+    page.window.width = 1000
+    page.window.height = 800
+    page.window.resizable = True
     page.window.min_width = 400
     page.window.min_height = 600
 
@@ -42,21 +44,21 @@ def main(page: ft.Page):
         from views.dashboard_view import DashboardView
         from views.passwords_view import PasswordsView
         from views.change_password import ChangePasswordView
-        from utils.sync_service import BridgeClient
-        
-        # Instanciar managers de datos y seguridad
+        from utils.sync_service import BridgeServer
+        from utils.backup import export_passwords_bridge
+
         db = DatabaseManager()
         db.connect()
         auth = AuthManager(db)
-        
-        # Servicios de Sincronización Globales (Solo Cliente/Móvil)
-        bridge_client = BridgeClient()
 
-        # Exponer estado y servicios globales en la página
-        page.is_mobile = True
+        # Instanciar el servidor (no iniciarlo aún, esperamos al login)
+        bridge_server = BridgeServer()
+
+        # Exponer servicios globalmente en la página
+        page.is_mobile = False
         page.kv_db = db
         page.kv_auth = auth
-        page.kv_bridge = bridge_client
+        page.kv_bridge = bridge_server
 
         # ------------------------------------------------------------------ #
         #  Navegación
@@ -67,142 +69,101 @@ def main(page: ft.Page):
             page.overlay.clear()
 
             if view_name == "login":
-                login_view = LoginView(page, auth, on_login_success=lambda: post_login())
-                page.add(login_view.build())
+                view = LoginView(page, auth, on_login_success=lambda: post_login())
+                page.add(view.build())
 
             elif view_name == "dashboard":
-                dashboard = DashboardView(
-                    page, db, auth, bridge_client,
+                view = DashboardView(
+                    page, db, auth, bridge_server,
                     on_navigate=lambda v, **kw: navigate(v, **kw),
                     on_logout=lambda: logout(),
                 )
-                page.add(dashboard.build())
+                page.add(view.build())
 
-            elif view_name == "sync_client":
-                from views.sync_client_view import SyncClientView
-                sync_view = SyncClientView(
-                    page, db, auth, bridge_client,
+            elif view_name == "sync_host":
+                from views.sync_host_view import SyncHostView
+                view = SyncHostView(
+                    page, db, auth, bridge_server,
                     on_back=lambda: navigate("dashboard")
                 )
-                page.add(sync_view.build())
+                page.add(view.build())
 
             elif view_name == "passwords":
                 category_id = kwargs.get("category_id", 8)
                 categories = db.get_all_categories()
-                category = next((c for c in categories if c["id"] == category_id), categories[-1])
-                pw_view = PasswordsView(
-                    page, db, auth, bridge_client,
+                category = next(
+                    (c for c in categories if c["id"] == category_id),
+                    categories[-1]
+                )
+                view = PasswordsView(
+                    page, db, auth, bridge_server,
                     category=category,
                     on_back=lambda: navigate("dashboard"),
                     on_refresh=lambda: navigate("passwords", category_id=category_id),
                 )
-                page.add(pw_view.build())
+                page.add(view.build())
 
             elif view_name == "change_password":
                 is_forced = kwargs.get("is_forced", False)
-                change_view = ChangePasswordView(
+                view = ChangePasswordView(
                     page, auth,
                     is_forced=is_forced,
                     on_complete=lambda: navigate("dashboard"),
                 )
-                page.add(change_view.build())
+                page.add(view.build())
 
             page.update()
 
-        def post_login():
-            """Acciones post-login: verificar rotación, reconectar sync y navegar."""
-            # Intentar reconexión automática
-            last_server_ip = db.get_config("last_sync_ip")
-            trust_token = db.get_config("trust_token")
-            device_id = db.get_config("device_id")
-            
-            if last_server_ip and trust_token and device_id:
-                # Capturar en variables locales inmutables para el cierre (closure)
-                _saved_ip = last_server_ip
-                _saved_token = trust_token
-                _saved_device = device_id
-
-                def _try_reconnect():
-                    # Usamos lista mutable para poder reasignar la IP dentro de la clausura
-                    server_ip = [_saved_ip]
-
-                    def on_remote_vault(v):
+        def _start_bridge():
+            """Inicia el puente en segundo plano si no está activo."""
+            if not bridge_server.is_running:
+                try:
+                    def vault_provider():
+                        return export_passwords_bridge(
+                            db.get_all_passwords(), auth.key
+                        )
+                        
+                    def _handle_incoming_vault(data_list):
+                        ins, upd, skp = db.import_from_list(data_list, auth.key)
+                        if ins > 0 or upd > 0:
+                            ic(f"[Sync] Bóveda recibida. Insertadas: {ins}, Actualizadas: {upd}")
+                            try:
+                                page.snack_bar = ft.SnackBar(ft.Text("🔄 Sincronizado desde el Móvil"), bgcolor=ft.Colors.GREEN_800)
+                                page.snack_bar.open = True
+                                page.update()
+                            except: pass
+                            
+                    bridge_server.on_vault_received = _handle_incoming_vault
+                    bridge_server.start(vault_provider)
+                    
+                    # Recepción de portapapeles del móvil → puesto en el portapapeles de Windows
+                    def _on_mobile_clipboard(txt: str):
+                        ic(f"[Clipboard] Móvil → PC: {txt[:30]}...")
                         try:
-                            import json
-                            data_list = json.loads(v)
-                            db.import_from_list(data_list, auth.key)
-                        except Exception as e:
-                            ic(f"Error importando bóveda remota silenciosa: {e}")
-
-                    def _safe_clipboard(txt):
-                        from utils.clipboard_helper import copy_to_clipboard
+                            import subprocess
+                            subprocess.run(
+                                ["powershell", "-command", f"Set-Clipboard -Value '{txt.replace(chr(39), '')}'"],
+                                capture_output=True
+                            )
+                        except Exception:
+                            pass
                         try:
-                            copy_to_clipboard(page, txt)
                             page.snack_bar = ft.SnackBar(
-                                ft.Text("📋 ¡Portapapeles del PC recibido!"),
-                                bgcolor=ft.Colors.GREEN_400
+                                ft.Text(f"📋 Portapapeles del Móvil: {txt[:40]}"),
+                                bgcolor=ft.Colors.BLUE_800
                             )
                             page.snack_bar.open = True
                             page.update()
-                        except Exception as ex:
-                            ic(f"Clipboard UI error: {ex}")
+                        except: pass
+                        
+                    bridge_server.start_clipboard_listener(on_receive=_on_mobile_clipboard)
+                    ic("BridgeServer iniciado automáticamente tras login.")
+                except Exception as ex:
+                    ic(f"Error iniciando bridge: {ex}")
 
-                    # --- Intento 1: IP guardada ---
-                    success = bridge_client.attempt_silent_handshake(
-                        server_ip[0], 5005, _saved_device, _saved_token
-                    )
-
-                    # --- Intento 2: Fallback via mDNS si la IP cambió ---
-                    if not success:
-                        try:
-                            from zeroconf import Zeroconf, ServiceBrowser
-                            import socket, time
-
-                            class SilentLocate:
-                                def __init__(self): self.ip = None
-                                def remove_service(self, z, t, n): pass
-                                def update_service(self, z, t, n): pass
-                                def add_service(self, zc, type_, name):
-                                    info = zc.get_service_info(type_, name)
-                                    if info and info.addresses:
-                                        self.ip = socket.inet_ntoa(info.addresses[0])
-
-                            zc = Zeroconf()
-                            sl = SilentLocate()
-                            sb = ServiceBrowser(zc, "_keyvault._tcp.local.", sl)
-                            time.sleep(3)
-                            try: sb.cancel()
-                            except: pass
-                            zc.close()
-
-                            if sl.ip:
-                                server_ip[0] = sl.ip
-                                db.set_config("last_sync_ip", sl.ip)
-                                success = bridge_client.attempt_silent_handshake(
-                                    server_ip[0], 5005, _saved_device, _saved_token
-                                )
-                        except Exception as ex:
-                            ic(f"Error en fallback Zeroconf móvil: {ex}")
-
-                    # --- Conexión completa si el handshake fue exitoso ---
-                    if success:
-                        connected = bridge_client.connect(
-                            server_ip[0], 5005,
-                            bridge_client.token,
-                            bridge_client.key,
-                            on_vault=on_remote_vault,
-                            on_clipboard=_safe_clipboard,
-                            trust_token=_saved_token,
-                            device_id=_saved_device
-                        )
-                        if connected:
-                            bridge_client.start_auto_sync_loop(db, auth.key)
-                            ic("Reconexión silenciosa completa. Clipboard y auto-sync activos.")
-                    else:
-                        ic("Reconexión silenciosa fallida. Necesita vinculación manual.")
-
-                import threading
-                threading.Thread(target=_try_reconnect, name="SilentReconnect", daemon=True).start()
+        def post_login():
+            """Acciones post-login: arrancar bridge y navegar."""
+            _start_bridge()
 
             if auth.needs_rotation():
                 navigate("change_password", is_forced=True)
@@ -210,11 +171,19 @@ def main(page: ft.Page):
                 navigate("dashboard")
 
         def logout():
-            """Cerrar sesión."""
+            """Cerrar sesión — el bridge se mantiene activo."""
             auth.lock()
             navigate("login")
 
-        # Iniciar en la pantalla de login
+        # Detener bridge al cerrar la ventana
+        async def on_window_event(e):
+            if e.data == "close":
+                if bridge_server.is_running:
+                    bridge_server.stop()
+
+        page.window.on_event = on_window_event
+
+        # Iniciar en login
         navigate("login")
 
     except Exception as e:
@@ -226,16 +195,18 @@ def main(page: ft.Page):
         page.add(
             ft.ListView(
                 controls=[
-                    ft.Text("⚠️ CRASH FATAL DE INICIALIZACIÓN", color="red", weight=ft.FontWeight.BOLD, size=20),
-                    ft.Text("La aplicación falló al arrancar. Detalles en errors.log.", color="white70"),
-                    ft.Text(error_trace, color="red", selectable=True, font_family="monospace", size=11)
+                    ft.Text("CRASH FATAL DE INICIALIZACION", color="red",
+                            weight=ft.FontWeight.BOLD, size=20),
+                    ft.Text("La aplicacion fallo al arrancar. Detalles en errors.log.",
+                            color="white70"),
+                    ft.Text(error_trace, color="red", selectable=True,
+                            font_family="monospace", size=11)
                 ],
-                expand=True,
-                padding=20,
-                auto_scroll=True
+                expand=True, padding=20, auto_scroll=True
             )
         )
         page.update()
+
 
 if __name__ == "__main__":
     ft.run(main)

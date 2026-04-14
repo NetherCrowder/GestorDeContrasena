@@ -47,6 +47,24 @@ Tus datos son tuyos. Recomendamos hacer un respaldo periódicamente:
 
 ---
 
+## 📱 Sincronización Móvil (AutoBridge)
+
+Tu KeyVault en el Escritorio está diseñado de forma inteligente para comunicarse con la Aplicación KeyVault en tu dispositivo móvil sin tener que usar ninguna Nube pública.
+
+### Cómo Emparejar tu Teléfono
+1. Conecta tu teléfono a la **misma red Wi-Fi** en la que está el ordenador.
+2. Inicia sesión en tu KeyVault en la computadora; el "BridgeServer" se encenderá en segundo plano.
+3. Abre tu aplicación de Android/iOS y busca dispositivos. El teléfono detectará a la PC automáticamente de forma silenciosa e interactiva.
+4. Para la **primera conexión**, el servidor en PC emitirá vía consola un PIN numérico de 6 dígitos y una Clave Alfanumérica por seguridad estricta para garantizar que nadie más se adueñe de tus datos.
+5. Ingrésalas en el teléfono. Una vez ligado, tu dispositivo está en la lista de confianza y **se reconectará automáticamente de forma transparente** en el futuro.
+
+### Magia del Portapapeles (Clipboard Sharing)
+Si un dispositivo (PC o Móvil) está en sincronía gracias al AutoBridge:
+*   Si le das al ícono de "**Copiar**" en la app móvil, el texto va a incrustarse de inmediato en el portapapeles global de tu Windows para que lo pegues rápidamente en el navegador del escritorio (Ctrl+V).
+*   Si le das a  "**Enviar al Móvil**" en el escritorio, el teléfono recibe e inserta la clave en su portapapeles.
+
+---
+
 ## 🛡️ Seguridad y Privacidad
 
 - **Cierre de Sesión**: Usa el botón de candado rojo en la esquina superior derecha o el botón en Ajustes para cerrar tu bóveda.

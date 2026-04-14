@@ -55,6 +55,14 @@ La aplicación utiliza un patrón de **Navegación por Estado**:
 - `AuditView`: Analiza la entropía de las claves y detecta vulnerabilidades (como patrones de teclado o palabras comunes).
 - `GeneratorView`: Motor de generación aleatoria con parámetros ajustables.
 
+## 📶 4. Capa de Red Local: AutoBridge (BridgeServer)
+Para permitir que aplicaciones acompañantes móviles modifiquen y lean los datos de KeyVault sin violar las políticas _Offline_, el escritorio asume el rol de Nodo de Sincronización a través de una red local compartida y directa (WLAN/LAN).
+
+- **Descubrimiento Transparente**: Se utiliza la dependencia `zeroconf` en Python para publicar el servicio por multidifusión mDNS bajo el puntero `_keyvault._tcp.local.`, evitando que el usuario ingrese la IP de su computador de manera estática.
+- **Micro-Servidor API (FastAPI)**: Cuando el usuario se Identifica en la interfaz de Host Principal en el escritorio, un hilo alterno *Daemon* invoca un servicio FastApi hosteado por Uvicorn (enlazado al puerto `5005`). 
+- **Persistencia de Vínculo Local**: El modelo de autenticación por Token entre pares (Trust Token) se archiva directamente en el directorio interno de datos de la cuenta de usuario de la computadora huesped (`%LOCALAPPDATA%\KeyVault\bridge_devices.json`).
+- **Endpoints de Clipboard**: FastApi expone una ruta `POST /clipboard/push` la cual emplea el módulo de portapapeles global del OS (`Get-Clipboard` / Flet Page API) para acoplar el Buffer de Portapapeles de la PC al Buffer de Celular de manera bidireccional casi a un nivel nativo.
+
 ---
 
 ## 🔄 Flujos de Datos Críticos
